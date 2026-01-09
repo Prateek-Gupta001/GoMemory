@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Prateek-Gupta001/GoMemory/llm"
+	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 )
@@ -12,12 +14,16 @@ import (
 type MemoryServer struct {
 	listenAddr string
 	store      storage.Storage
+	llm        llm.LLM
+	memory     memory.Memory
 }
 
-func NewMemoryServer(listenAddr string, store storage.Storage) *MemoryServer {
+func NewMemoryServer(listenAddr string, store storage.Storage, llm llm.LLM, memory memory.Memory) *MemoryServer {
 	return &MemoryServer{
 		listenAddr: listenAddr,
 		store:      store,
+		llm:        llm,
+		memory:     memory,
 	}
 }
 

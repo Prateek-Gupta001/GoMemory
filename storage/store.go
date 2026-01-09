@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+
+	_ "github.com/lib/pq"
 )
 
 type Storage interface {
@@ -16,7 +18,7 @@ type PostgresStore struct {
 
 func NewPostgresStore() (*PostgresStore, error) {
 	dbPassword := os.Getenv("DB_PASSWORD")
-	connStr := fmt.Sprintf("host=127.0.0.1 port=5432 user=postgres dbname=memops, nil password=%s sslmode=disable", dbPassword)
+	connStr := fmt.Sprintf("host=127.0.0.1 port=5433 user=postgres dbname=memory password=%s sslmode=disable", dbPassword)
 	// ... rest of code
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
