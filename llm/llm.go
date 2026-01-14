@@ -3,7 +3,8 @@ package llm
 import "github.com/Prateek-Gupta001/GoMemory/types"
 
 type LLM interface {
-	GenerateMemoryText(types.Message) ([]string, error)
+	GenerateMemoryText([]types.Message, []string) ([]string, error)
+	ExpandQuery([]types.Message) (string, error)
 }
 
 type GeminiLLM struct {
@@ -17,6 +18,11 @@ func NewGeminiLLM() *GeminiLLM {
 		ApiKey:    "dummyapikey",
 	}
 }
-func (llm *GeminiLLM) GenerateMemoryText(messages types.Message) ([]string, error) {
+func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories []string) ([]string, error) {
 	return nil, nil
+}
+
+func (llm *GeminiLLM) ExpandQuery(messages []types.Message) (string, error) {
+
+	return "", nil
 }

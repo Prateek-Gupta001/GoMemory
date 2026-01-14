@@ -1,28 +1,27 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
-	"github.com/Prateek-Gupta001/GoMemory/llm"
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
 	"github.com/Prateek-Gupta001/GoMemory/types"
+	"github.com/google/uuid"
 )
 
 type MemoryServer struct {
 	listenAddr string
 	store      storage.Storage
-	llm        llm.LLM
 	memory     memory.Memory
 }
 
-func NewMemoryServer(listenAddr string, store storage.Storage, llm llm.LLM, memory memory.Memory) *MemoryServer {
+func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Memory) *MemoryServer {
 	return &MemoryServer{
 		listenAddr: listenAddr,
 		store:      store,
-		llm:        llm,
 		memory:     memory,
 	}
 }
@@ -63,7 +62,7 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")
-	req := &types.RequestStruct{}
+	req := &types.InsertMemoryRequest{}
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		slog.Error("Got this error while trying to decode the json body! Bad request", "error", err)
@@ -73,6 +72,17 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 			Message: "Request format is wrong",
 		}
 	}
+	reqId := uuid.NewString()
+	slog.Info("request Id intialised", "reqId", reqId)
+	ctx := context.WithValue(context.Background(), types.UserIdKey, req.UserId)
+	err := m.memory.SumbitMemoryInsertionRequest(req.Messages, reqId, ctx, req.UserId)
+	if err != nil {
+		return &APIError{
+			Error:  err,
+			Status: http.StatusInternalServerError,
+		}
+	}
+	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well .....
 
 	return &APIError{
 		Error:  nil,

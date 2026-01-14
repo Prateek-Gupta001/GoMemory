@@ -6,10 +6,12 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/Prateek-Gupta001/GoMemory/types"
 	_ "github.com/lib/pq"
 )
 
 type Storage interface {
+	InsertMemoryRequest(req *types.InsertMemoryRequest, reqId string) error
 }
 
 type PostgresStore struct {
@@ -33,4 +35,8 @@ func NewPostgresStore() (*PostgresStore, error) {
 		db: db,
 	}
 	return ps, nil
+}
+
+func (s *PostgresStore) InsertMemoryRequest(req *types.InsertMemoryRequest, reqId string) error {
+	return nil
 }
