@@ -11,6 +11,7 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/storage"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/joho/godotenv"
+	"github.com/nats-io/nats.go"
 )
 
 func main() {
@@ -26,11 +27,17 @@ func main() {
 	vectordb, err := vectordb.NewQdrantMemoryDB()
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the vector db", "err", err)
-		panic(err)
+
 	}
 	llm := llm.NewGeminiLLM()
 	embedClient := embed.NewEmbeddingClient("dummyEmbedServiceURL")
-	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, 5000, 2)
+	nc, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		slog.Error("can't connect to NATS", "error", err)
+	}
+	slog.Info("NATS JetStream is up!")
+	defer nc.Close()
+	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, nc, 5000, 2)
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}

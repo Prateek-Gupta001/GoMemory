@@ -1,6 +1,10 @@
 package llm
 
-import "github.com/Prateek-Gupta001/GoMemory/types"
+import (
+	"os"
+
+	"github.com/Prateek-Gupta001/GoMemory/types"
+)
 
 type LLM interface {
 	GenerateMemoryText([]types.Message, []string) ([]string, error)
@@ -15,14 +19,15 @@ type GeminiLLM struct {
 func NewGeminiLLM() *GeminiLLM {
 	return &GeminiLLM{
 		ModelName: "Gemini",
-		ApiKey:    "dummyapikey",
+		ApiKey:    os.Getenv("GOOGLE_GEMINI_API_KEY"),
 	}
 }
+
 func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories []string) ([]string, error) {
+
 	return nil, nil
 }
 
 func (llm *GeminiLLM) ExpandQuery(messages []types.Message) (string, error) {
-
 	return "", nil
 }

@@ -20,7 +20,7 @@ type QdrantMemoryDB struct {
 func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: "localhost",
-		Port: 6335,
+		Port: 6336,
 	})
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the qdrant memory db!", "error", err)
@@ -28,8 +28,7 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	}
 	exists, err1 := client.CollectionExists(context.Background(), "Go_Memory_db")
 	if err1 != nil {
-		slog.Error("Got this error while checking if collection exists or not!", "error", err)
-		return &QdrantMemoryDB{}, err
+		slog.Error("Got this error while checking if collection exists or not!", "error", err1)
 	}
 	if !exists {
 		slog.Info("new collection being created!")

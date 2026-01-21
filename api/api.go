@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -43,6 +42,11 @@ type APIError struct {
 	Status  int    //hence send a custom message right then and there ...
 }
 
+type MemoryInsertionResponse struct {
+	ReqId string
+	Msg   string
+}
+
 type apiFunc func(w http.ResponseWriter, r *http.Request) *APIError
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -74,16 +78,24 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	}
 	reqId := uuid.NewString()
 	slog.Info("request Id intialised", "reqId", reqId)
-	ctx := context.WithValue(context.Background(), types.UserIdKey, req.UserId)
-	err := m.memory.SumbitMemoryInsertionRequest(req.Messages, reqId, ctx, req.UserId)
+	memJob := types.MemoryInsertionJob{
+		Messages: req.Messages,
+		ReqId:    reqId,
+		UserId:   req.UserId,
+	}
+	err := m.memory.SumbitMemoryInsertionRequest(memJob)
 	if err != nil {
+		slog.Info("Got this error while trying to insert memory", "error", err)
 		return &APIError{
 			Error:  err,
 			Status: http.StatusInternalServerError,
 		}
 	}
 	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well .....
-
+	writeJSON(w, http.StatusOK, MemoryInsertionResponse{
+		ReqId: reqId,
+		Msg:   "Memory Insertion Job has been queued for insertion!",
+	})
 	return &APIError{
 		Error:  nil,
 		Status: http.StatusOK,

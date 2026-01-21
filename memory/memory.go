@@ -1,7 +1,7 @@
 package memory
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -9,30 +9,30 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/llm"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
+	"github.com/nats-io/nats.go"
 )
 
 type Memory interface {
 	GetMemories(user_query string, userId string, threshold float32) ([]string, error) //For normal messages
 	DeleteMemory(payloadId string) error                                               //from the db
-	SumbitMemoryInsertionRequest(messages []types.Message, reqId string, ctx context.Context, userId string) error
+	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllMemories(userId string) ([]string, error)
 	// in the future: delete user's memories and delete memory by Id...
 }
 
 type MemoryAgent struct {
-	vectordb                vectordb.VectorDB
-	llm                     llm.LLM
-	embedClient             embed.Embed
-	MemoryInsertionJobQueue chan MemoryInsertionJob
+	Vectordb    vectordb.VectorDB
+	LLM         llm.LLM
+	EmbedClient embed.Embed
+	NatClient   *nats.Conn
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, queueLen int, numWorker int) (*MemoryAgent, error) {
-	MemoryInsertionJobQueue := make(chan MemoryInsertionJob, queueLen)
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc *nats.Conn, queueLen int, numWorker int) (*MemoryAgent, error) {
 	m := &MemoryAgent{
-		vectordb:                vectordb,
-		llm:                     llm,
-		embedClient:             embedClient,
-		MemoryInsertionJobQueue: MemoryInsertionJobQueue,
+		Vectordb:    vectordb,
+		LLM:         llm,
+		EmbedClient: embedClient,
+		NatClient:   nc,
 	}
 	for i := 0; i < numWorker; i++ {
 		go m.MemoryWorker(i)
@@ -40,38 +40,28 @@ func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.E
 	return m, nil
 }
 
-type MemoryInsertionJob struct {
-	ReqId    string
-	UserId   string
-	Messages []types.Message
-	ctx      context.Context
-}
-
 func (m *MemoryAgent) MemoryWorker(id int) {
 	slog.Info("Memory agent is up and running!", "id", id)
-	for job := range m.MemoryInsertionJobQueue {
-		err := m.InsertMemory(job.Messages, job.UserId, job.ctx)
-		if err != nil {
-			slog.Error("Got this error while inserting memory", "id", job.ReqId, "userId", job.UserId)
+	m.NatClient.Subscribe("memory_work", func(msg *nats.Msg) {
+		fmt.Printf("Worker got a memory Job: %s\n", string(msg.Data))
+		memJob := &types.MemoryInsertionJob{}
+		if err := json.Unmarshal(msg.Data, memJob); err != nil {
+			slog.Error("error while unmarshalling NATS-jetstream data", "error", err)
 		}
-		slog.Info("Memory Insertion Succesful", "id", job.ReqId, "userId", job.UserId)
-	}
+		m.InsertMemory(memJob)
+	})
 }
 
-func (m *MemoryAgent) SumbitMemoryInsertionRequest(messages []types.Message, reqId string, ctx context.Context, userId string) error {
-	select {
-	case m.MemoryInsertionJobQueue <- MemoryInsertionJob{
-		Messages: messages,
-		ReqId:    reqId,
-		ctx:      ctx,
-		UserId:   userId,
-	}:
-		slog.Info("Memory Job inserted successfully!", "reqId", reqId)
-		return nil
-	default:
-		slog.Info("Channel was full! Dropping this request ....")
-		return fmt.Errorf("Too many requests on the server!")
+func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
+
+	slog.Info("Memory Job inserted successfully into NATS-Jetstream ", "reqId", memJob.ReqId)
+	memJson, err := json.Marshal(memJob)
+	if err != nil {
+		slog.Info("Got this error while marshalling the MemoryInsertionJob ", "error", err)
+		return err
 	}
+	err = m.NatClient.Publish("memory_work", memJson)
+	return err
 }
 
 func (m *MemoryAgent) GetMemories(text string, userId string, threshold float32) ([]string, error) {
@@ -83,35 +73,35 @@ func (m *MemoryAgent) DeleteMemory(payloadId string) error {
 	return nil
 }
 
-func (m *MemoryAgent) InsertMemory(messages []types.Message, reqId string, ctx context.Context) error {
+func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take the messages and pass it to llm -> get query
-	expandedQuery, err := m.llm.ExpandQuery(messages)
+	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages)
 	if err != nil {
-		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", reqId)
+		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
-	Embedding, err := m.embedClient.GenerateEmbeddings(expandedQuery)
+	Embedding, err := m.EmbedClient.GenerateEmbeddings(expandedQuery)
 	if err != nil {
-		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", reqId)
+		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	//take query and pass it to qdrant
-	similarityResults, err := m.vectordb.GetSimilarityResults(Embedding)
+	similarityResults, err := m.Vectordb.GetSimilarityResults(Embedding)
 	if err != nil {
-		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", reqId)
+		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	//get the results and pass it to llm
-	NewMemories, err := m.llm.GenerateMemoryText(messages, similarityResults)
+	NewMemories, err := m.LLM.GenerateMemoryText(memjob.Messages, similarityResults)
 	if err != nil {
-		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", reqId)
+		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	//get llm response and pass it to qdrant
 	slog.Info("New memories are", "memories", NewMemories)
-	err = m.vectordb.InsertNewMemories()
+	err = m.Vectordb.InsertNewMemories() //will take in userId as well
 	if err != nil {
-		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", reqId)
+		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
 	}
 	//update the entry in the database.
 	return nil

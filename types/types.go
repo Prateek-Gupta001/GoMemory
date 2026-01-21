@@ -28,4 +28,10 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+type MemoryInsertionJob struct {
+	ReqId    string
+	UserId   string
+	Messages []Message
+}
+
 type Embedding []float32

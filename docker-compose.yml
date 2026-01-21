@@ -1,0 +1,36 @@
+
+services:
+  # NATS with JetStream enabled
+  nats:
+    image: nats:latest
+    container_name: nats-jetstream
+    command: "-js -m 8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant-gomemory
+    ports:
+      - "6336:6334" #this is the grpc port in qdrant.
+      - "6335:6333" #this is the http port in qdrant. 
+
+  # PostgreSQL
+  postgres:
+    image: postgres:latest
+    container_name: gomemory
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: memory
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+# This section was missing or commented out, causing the error.
+# It registers "pg_data" so Docker knows it exists.
+volumes:
+  pg_data:
