@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"os"
 
 	"github.com/Prateek-Gupta001/GoMemory/api"
 	"github.com/Prateek-Gupta001/GoMemory/embed"
@@ -29,7 +30,11 @@ func main() {
 		slog.Error("Got this error while trying to intialise the vector db", "err", err)
 
 	}
-	llm := llm.NewGeminiLLM()
+	llm, err := llm.NewGeminiLLM()
+	if err != nil {
+		slog.Error("Got this error while trying to generate a new geminiLLM client", "error", err)
+		os.Exit(1)
+	}
 	embedClient := embed.NewEmbeddingClient("dummyEmbedServiceURL")
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {

@@ -3,7 +3,7 @@ package embed
 import "github.com/Prateek-Gupta001/GoMemory/types"
 
 type Embed interface {
-	GenerateEmbeddings(user_query string) (types.Embedding, error)
+	GenerateEmbeddings(user_query []string) ([]types.Embedding, error)
 }
 
 type EmbeddingClient struct {
@@ -16,6 +16,7 @@ func NewEmbeddingClient(EmbedServiceUrl string) *EmbeddingClient {
 	}
 }
 
-func (e *EmbeddingClient) GenerateEmbeddings(user_query string) (types.Embedding, error) {
+func (e *EmbeddingClient) GenerateEmbeddings(user_query []string) ([]types.Embedding, error) {
+	//sends grpc request to the python microservice!
 	return nil, nil
 }

@@ -1,9 +1,12 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
@@ -48,7 +51,9 @@ func (m *MemoryAgent) MemoryWorker(id int) {
 		if err := json.Unmarshal(msg.Data, memJob); err != nil {
 			slog.Error("error while unmarshalling NATS-jetstream data", "error", err)
 		}
-		m.InsertMemory(memJob)
+		if err := m.InsertMemory(memJob); err != nil {
+			slog.Info("Memory worker encountered an error while working", "error", err, "reqId", memJob.ReqId, "userId", memJob.UserId)
+		}
 	})
 }
 
@@ -75,18 +80,26 @@ func (m *MemoryAgent) DeleteMemory(payloadId string) error {
 
 func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take the messages and pass it to llm -> get query
-	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages)
+	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*500)
+	defer cancel_ctx()
+	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
-	Embedding, err := m.EmbedClient.GenerateEmbeddings(expandedQuery)
+	if strings.ToLower(expandedQuery) == "skip" {
+		slog.Info("Memory Insertion is NOT REQUIRED!", "messages", memjob.Messages)
+		return nil
+	}
+	Embedding, err := m.EmbedClient.GenerateEmbeddings([]string{expandedQuery})
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	//take query and pass it to qdrant
-	similarityResults, err := m.Vectordb.GetSimilarityResults(Embedding)
+	//Here len of Embedding will be 0
+	slog.Info("Len of Embedding will be 0", "len", len(Embedding))
+	similarityResults, err := m.Vectordb.GetSimilarityResults(Embedding[0])
 	if err != nil {
 		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
@@ -97,9 +110,10 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
+	NewMemoriesEmbedding, err := m.EmbedClient.GenerateEmbeddings(NewMemories)
 	//get llm response and pass it to qdrant
 	slog.Info("New memories are", "memories", NewMemories)
-	err = m.Vectordb.InsertNewMemories() //will take in userId as well
+	err = m.Vectordb.InsertNewMemories(NewMemoriesEmbedding) //will take in userId as well
 	if err != nil {
 		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
 	}

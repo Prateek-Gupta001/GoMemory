@@ -9,8 +9,8 @@ import (
 )
 
 type VectorDB interface {
-	GetSimilarityResults(embedding types.Embedding) ([]string, error)
-	InsertNewMemories() error
+	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string) ([]string, error)
+	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding) error
 }
 
 type QdrantMemoryDB struct {
@@ -48,11 +48,30 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	}, nil
 }
 
-func (qdb *QdrantMemoryDB) GetSimilarityResults(embedding types.Embedding) ([]string, error) {
+func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string) ([]string, error) {
+	qdb.Client.Query(context.Background(), &qdrant.QueryPoints{
+		CollectionName: "Go_Memory_db",
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("userId", userId),
+			}},
+		Prefetch: []*qdrant.PrefetchQuery{
+			{
+				Query: qdrant.NewQuerySparse(SparseEmbedding.Indices, SparseEmbedding.Values),
+				Using: qdrant.PtrOf("sparse"),
+			},
+			{
+				Query: qdrant.NewQueryDense(DenseEmbedding),
+				Using: qdrant.PtrOf("dense"),
+			},
+		},
+		Query: qdrant.NewQueryFusion(qdrant.Fusion_RRF),
+	})
+
 	return nil, nil
 }
 
-func (qdb *QdrantMemoryDB) InsertNewMemories() error {
+func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbedding, SparseEmbeddings []types.SparseEmbedding) error {
 
 	return nil
 }

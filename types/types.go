@@ -34,4 +34,9 @@ type MemoryInsertionJob struct {
 	Messages []Message
 }
 
-type Embedding []float32
+type DenseEmbedding []float32
+
+type SparseEmbedding struct {
+	Indices []uint32
+	Values  []float32
+}
