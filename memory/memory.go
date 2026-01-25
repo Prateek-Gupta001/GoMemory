@@ -98,7 +98,8 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	}
 	//take query and pass it to qdrant
 	//Here len of Embedding will be 0
-	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId)
+	slog.Info("Len of the emebddings should be in harmony", "len(DenseEmbedding)", len(DenseEmbedding), "len(SparseEmbedding)", len(SparseEmbedding), "num", 1)
+	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
@@ -112,7 +113,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(NewMemories)
 	//get llm response and pass it to qdrant
 	slog.Info("New memories are", "memories", NewMemories)
-	err = m.Vectordb.InsertNewMemories(DenseEmbedding, SparseEmbedding, NewMemories) //will take in userId as well
+	err = m.Vectordb.InsertNewMemories(DenseEmbedding, SparseEmbedding, NewMemories, ctx) //will take in userId as well
 	if err != nil {
 		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
 	}
