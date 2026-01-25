@@ -10,7 +10,7 @@ import (
 
 type VectorDB interface {
 	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string) ([]string, error)
-	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding) error
+	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding, []string) error
 }
 
 type QdrantMemoryDB struct {
@@ -38,6 +38,10 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 				Size:     384,
 				Distance: qdrant.Distance_Cosine,
 			}),
+			SparseVectorsConfig: qdrant.NewSparseVectorsConfig(
+				map[string]*qdrant.SparseVectorParams{
+					"text": {},
+				}),
 		})
 		if err != nil {
 			slog.Error("Got this error while trying to create the collection", "error", err)
@@ -49,29 +53,38 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 }
 
 func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string) ([]string, error) {
-	qdb.Client.Query(context.Background(), &qdrant.QueryPoints{
+	res, err := qdb.Client.Query(context.Background(), &qdrant.QueryPoints{
 		CollectionName: "Go_Memory_db",
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				qdrant.NewMatch("userId", userId),
 			}},
+		WithPayload: qdrant.NewWithPayload(true),
 		Prefetch: []*qdrant.PrefetchQuery{
 			{
 				Query: qdrant.NewQuerySparse(SparseEmbedding.Indices, SparseEmbedding.Values),
 				Using: qdrant.PtrOf("sparse"),
 			},
 			{
-				Query: qdrant.NewQueryDense(DenseEmbedding),
+				Query: qdrant.NewQueryDense(DenseEmbedding.Values),
 				Using: qdrant.PtrOf("dense"),
 			},
 		},
 		Query: qdrant.NewQueryFusion(qdrant.Fusion_RRF),
 	})
-
-	return nil, nil
+	if err != nil {
+		slog.Error("Got this error while trying to get similar memories", "error", err)
+		return nil, err
+	}
+	var x []string
+	for _, r := range res {
+		y := r.Payload
+		x = append(x, string(y["Memory"].GetStringValue()))
+	}
+	return x, nil
 }
 
-func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbedding, SparseEmbeddings []types.SparseEmbedding) error {
+func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbedding, SparseEmbeddings []types.SparseEmbedding, memories []string) error {
 
 	return nil
 }

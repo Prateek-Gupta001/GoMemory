@@ -91,15 +91,14 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		slog.Info("Memory Insertion is NOT REQUIRED!", "messages", memjob.Messages)
 		return nil
 	}
-	Embedding, err := m.EmbedClient.GenerateEmbeddings([]string{expandedQuery})
+	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{expandedQuery})
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	//take query and pass it to qdrant
 	//Here len of Embedding will be 0
-	slog.Info("Len of Embedding will be 0", "len", len(Embedding))
-	similarityResults, err := m.Vectordb.GetSimilarityResults(Embedding[0])
+	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId)
 	if err != nil {
 		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
@@ -110,16 +109,17 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
-	NewMemoriesEmbedding, err := m.EmbedClient.GenerateEmbeddings(NewMemories)
+	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(NewMemories)
 	//get llm response and pass it to qdrant
 	slog.Info("New memories are", "memories", NewMemories)
-	err = m.Vectordb.InsertNewMemories(NewMemoriesEmbedding) //will take in userId as well
+	err = m.Vectordb.InsertNewMemories(DenseEmbedding, SparseEmbedding, NewMemories) //will take in userId as well
 	if err != nil {
 		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
 	}
 	//update the entry in the database.
 	return nil
 }
+
 func LastUserContent(messages []types.Message) (string, bool) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == types.RoleUser {

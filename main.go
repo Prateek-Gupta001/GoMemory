@@ -35,7 +35,10 @@ func main() {
 		slog.Error("Got this error while trying to generate a new geminiLLM client", "error", err)
 		os.Exit(1)
 	}
-	embedClient := embed.NewEmbeddingClient("dummyEmbedServiceURL")
+	embedClient, err := embed.NewEmbeddingClient("localhost:50051")
+	if err != nil {
+		slog.Info("Got this error while creating a new embedding client!")
+	}
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
 		slog.Error("can't connect to NATS", "error", err)
