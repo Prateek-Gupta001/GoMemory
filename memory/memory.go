@@ -16,10 +16,10 @@ import (
 )
 
 type Memory interface {
-	GetMemories(user_query string, userId string, threshold float32) ([]string, error) //For normal messages
-	DeleteMemory(payloadId string) error                                               //from the db
+	GetMemories(user_query string, userId string, threshold float32) ([]types.Memory, error) //For normal messages
+	DeleteMemory(payloadId string) error                                                     //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
-	GetAllMemories(userId string) ([]string, error)
+	GetAllMemories(userId string) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
 }
 
@@ -69,7 +69,7 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 	return err
 }
 
-func (m *MemoryAgent) GetMemories(text string, userId string, threshold float32) ([]string, error) {
+func (m *MemoryAgent) GetMemories(text string, userId string, threshold float32) ([]types.Memory, error) {
 
 	return nil, nil
 }
@@ -82,7 +82,9 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take the messages and pass it to llm -> get query
 	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*500)
 	defer cancel_ctx()
+	slog.Info("Insert Memory Request recieved!", "jobId", memjob.ReqId)
 	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
+	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
@@ -91,6 +93,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		slog.Info("Memory Insertion is NOT REQUIRED!", "messages", memjob.Messages)
 		return nil
 	}
+	slog.Info("Preparing Embedding Generation!")
 	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{expandedQuery})
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
@@ -105,17 +108,45 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		return err
 	}
 	//get the results and pass it to llm
-	NewMemories, err := m.LLM.GenerateMemoryText(memjob.Messages, similarityResults)
+	MemoryOutput, err := m.LLM.GenerateMemoryText(memjob.Messages, similarityResults, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
-	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(NewMemories)
+	var memories []string
+	var memoryIds []string //These are the memory ids to be deleted from the database!!
+	for _, memory := range MemoryOutput.Actions {
+		if memory.ActionType == "INSERT" {
+			slog.Info("got an insert!")
+			if memory.TargetMemoryID != nil {
+				slog.Info("Damn .. llm made a mistake and gave a target memory Id in an INSERT request", "targetMemoryId", memory.TargetMemoryID)
+			}
+			memories = append(memories, *memory.Payload)
+		}
+		if memory.ActionType == "DELETE" {
+			slog.Info("got a DELETE!")
+			if memory.Payload != nil {
+				slog.Info("Damn .. llm made a mistake and gave a payload in an DELETE request", "payload", memory.Payload)
+			}
+			memoryIds = append(memoryIds, *memory.TargetMemoryID)
+		}
+	}
+
+	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(memories)
+	if len(memoryIds) != 0 {
+		slog.Info("Memories to delete are: ", "memoryIds", memoryIds)
+		if err := m.Vectordb.DeleteMemories(memoryIds, ctx); err != nil {
+			slog.Error("Got this error while deleting old memories of the user", "error", err)
+		}
+	}
 	//get llm response and pass it to qdrant
-	slog.Info("New memories are", "memories", NewMemories)
-	err = m.Vectordb.InsertNewMemories(DenseEmbedding, SparseEmbedding, NewMemories, ctx) //will take in userId as well
-	if err != nil {
-		slog.Info("Got this error while trying to generate insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
+	if len(memories) != 0 {
+		slog.Info("Len of the emebddings should be in harmony", "len(DenseEmbedding)", len(DenseEmbedding), "len(SparseEmbedding)", len(SparseEmbedding), "memories", len(memories))
+		slog.Info("Memories to insert are: ", "memories", memories)
+		err = m.Vectordb.InsertNewMemories(DenseEmbedding, SparseEmbedding, memories, memjob.UserId, ctx) //will take in userId as well
+		if err != nil {
+			slog.Info("Got this error while trying to insert the new memories into the vector db", "error", err, "reqId", memjob.ReqId)
+		}
 	}
 	//update the entry in the database.
 	return nil
@@ -130,6 +161,6 @@ func LastUserContent(messages []types.Message) (string, bool) {
 	return "", false
 }
 
-func (m *MemoryAgent) GetAllMemories(userId string) ([]string, error) {
+func (m *MemoryAgent) GetAllMemories(userId string) ([]types.Memory, error) {
 	return nil, nil
 }
