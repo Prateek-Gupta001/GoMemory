@@ -70,6 +70,8 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 }
 
 func (m *MemoryAgent) GetMemories(text string, userId string, threshold float32) ([]types.Memory, error) {
+	// dense, sparse := m.EmbedClient.GenerateEmbeddings()
+	// m.Vectordb.GetSimilarMemories()
 
 	return nil, nil
 }
@@ -94,7 +96,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		return nil
 	}
 	slog.Info("Preparing Embedding Generation!")
-	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{expandedQuery})
+	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + expandedQuery})
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
 		return err

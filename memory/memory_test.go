@@ -82,15 +82,7 @@ func TestInsertMemory(t *testing.T) {
 		Messages: []types.Message{
 			{
 				Role:    types.RoleUser,
-				Content: "Regarding my backend work, I'm specifically using Go with Gin and GORM for the API layer. Do you know any cool stuff about cars? I own a Honda civic .. which is pretty dang fast .. but a little rusty imo .. lmao",
-			},
-			{
-				Role:    types.RoleAssistant,
-				Content: "okay how can I help you with your backend work?",
-			},
-			{
-				Role:    types.RoleUser,
-				Content: "Yeah Actually I am building an AI Gateway .. which uses semantic caching to provide fast answers to repeating queries .. What do you know about all that?",
+				Content: "I wanna go to Rome and Paris ... I mean I live in Italy but I long for Sicily",
 			},
 		},
 	}
