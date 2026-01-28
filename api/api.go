@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Mem
 func (m *MemoryServer) Run() error {
 	r := http.NewServeMux()
 	r.HandleFunc("/add_memory", convertToHandleFunc(m.InsertIntoMemory))
+	r.HandleFunc("/get_memory", convertToHandleFunc(m.GetMemory))
 	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
 		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
 		return err
@@ -99,5 +101,49 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	return &APIError{
 		Error:  nil,
 		Status: http.StatusOK,
+	}
+}
+
+func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	var req = &types.MemoryRetrievalRequest{}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		slog.Info("Got malformed JSON here in the Get Memory request", "error", err)
+		return &APIError{
+			Message: "malformed JSON here in the Get Memory request",
+			Error:   err,
+			Status:  http.StatusBadRequest,
+		}
+	}
+	reqId := uuid.NewString()
+	req.ReqId = reqId
+	if req.Messages != nil {
+		slog.Info("Messages type request came in here!", "reqId", reqId)
+		return &APIError{
+			Message: "Messages format is not currently being supported! But we are working on it",
+			Error:   nil,
+			Status:  200,
+		}
+	}
+	if req.UserQuery != "" {
+		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)
+		userQuery := req.UserQuery
+		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, ctx)
+		if err != nil {
+			slog.Error("Got this error while trying to get memories", "error", err)
+			return &APIError{
+				Message: "Memory Retrieval Failed!",
+				Error:   err,
+				Status:  http.StatusInternalServerError,
+			}
+		}
+		writeJSON(w, http.StatusOK, Memories)
+	}
+	return &APIError{
+		Message: "Memory Retrieval was succesful",
+		Error:   nil,
+		Status:  http.StatusOK,
 	}
 }

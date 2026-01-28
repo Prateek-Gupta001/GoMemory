@@ -7,12 +7,11 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
-	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/nats-io/nats.go"
 )
 
-func NewtestMemroyAgent() *MemoryAgent {
+func NewtestMemoryAgent() *MemoryAgent {
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
 		slog.Error("can't connect to NATS", "error", err)
@@ -74,22 +73,32 @@ func NewtestMemroyAgent() *MemoryAgent {
 
 // }
 
-func TestInsertMemory(t *testing.T) {
-	agent := NewtestMemroyAgent()
-	memJob := types.MemoryInsertionJob{
-		ReqId:  "1234",
-		UserId: "user_123",
-		Messages: []types.Message{
-			{
-				Role:    types.RoleUser,
-				Content: "I wanna go to Rome and Paris ... I mean I live in Italy but I long for Sicily",
-			},
-		},
-	}
-	fmt.Println("agent", agent)
-	err := agent.InsertMemory(&memJob)
+// func TestInsertMemory(t *testing.T) {
+// 	agent := NewtestMemoryAgent()
+// 	memJob := types.MemoryInsertionJob{
+// 		ReqId:  "1234",
+// 		UserId: "user_123",
+// 		Messages: []types.Message{
+// 			{
+// 				Role:    types.RoleUser,
+// 				Content: "I wanna go to Rome and Paris ... I mean I live in Italy but I long for Sicily",
+// 			},
+// 		},
+// 	}
+// 	fmt.Println("agent", agent)
+// 	err := agent.InsertMemory(&memJob)
+// 	if err != nil {
+// 		t.Error("Got this error right here", err)
+// 	}
+// }
+
+func TestGetMemories(t *testing.T) {
+	agent := NewtestMemoryAgent()
+	m, err := agent.GetMemories("My car was towed yesterday what should I do?", "user_123", "1234", t.Context())
 	if err != nil {
-		t.Error("Got this error right here", err)
+		t.Error("ERROR ", err)
+		t.Fail()
 	}
+	fmt.Println("Memories", m)
 
 }

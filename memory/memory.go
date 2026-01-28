@@ -16,8 +16,8 @@ import (
 )
 
 type Memory interface {
-	GetMemories(user_query string, userId string, threshold float32) ([]types.Memory, error) //For normal messages
-	DeleteMemory(payloadId string) error                                                     //from the db
+	GetMemories(user_query string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) //For normal messages
+	DeleteMemory(payloadId string) error                                                                     //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllMemories(userId string) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
@@ -69,11 +69,18 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 	return err
 }
 
-func (m *MemoryAgent) GetMemories(text string, userId string, threshold float32) ([]types.Memory, error) {
-	// dense, sparse := m.EmbedClient.GenerateEmbeddings()
-	// m.Vectordb.GetSimilarMemories()
-
-	return nil, nil
+func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) {
+	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text})
+	if err != nil {
+		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)
+		return nil, err
+	}
+	Memories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, ctx)
+	if err != nil {
+		slog.Error("Got this error while getting similar memories!", "error", err, "reqId", reqId)
+		return nil, err
+	}
+	return Memories, nil
 }
 
 func (m *MemoryAgent) DeleteMemory(payloadId string) error {

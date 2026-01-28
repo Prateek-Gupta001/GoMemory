@@ -3,6 +3,7 @@ package embed
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	pb "github.com/Prateek-Gupta001/GoMemory/proto/embedding"
@@ -57,6 +58,7 @@ func (e *EmbeddingClient) Close() error {
 // for a list of queries
 func (e *EmbeddingClient) GenerateEmbeddings(user_query []string) ([]types.DenseEmbedding, []types.SparseEmbedding, error) {
 	// Validate input
+	slog.Info("Got Embedding Generation Request!")
 	if len(user_query) == 0 {
 		return nil, nil, fmt.Errorf("user_query cannot be empty")
 	}
@@ -75,6 +77,7 @@ func (e *EmbeddingClient) GenerateEmbeddings(user_query []string) ([]types.Dense
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create embeddings: %w", err)
 	}
+	slog.Info("Embedding Generation was succesful!", "len(resp.DenseEmbeddings)", len(resp.DenseEmbeddings), "len(resp.SparseEmbeddings)", len(resp.SparseEmbeddings))
 
 	// Convert protobuf response to types
 	denseEmbeddings := make([]types.DenseEmbedding, len(resp.DenseEmbeddings))
@@ -91,7 +94,7 @@ func (e *EmbeddingClient) GenerateEmbeddings(user_query []string) ([]types.Dense
 			Values:  sparseEmb.Values,
 		}
 	}
-
+	slog.Info("Generate Embeddings securely secured from the protobuf response format!")
 	return denseEmbeddings, sparseEmbeddings, nil
 }
 

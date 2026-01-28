@@ -55,7 +55,7 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             numpy array of dense embedding values
         """
         try:
-            embedding = list(self.dense_model.embed([query]))[0]
+            embedding = list(self.dense_model([query]))[0]
             return embedding.astype(np.float32)
         except Exception as e:
             logger.error(f"Error generating dense embedding: {e}")
@@ -64,16 +64,28 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
     def _get_dense_embeddings_batch(self, queries: List[str]) -> List[np.ndarray]:
         """
         Generate dense embeddings for multiple queries in a single batch
-        
-        Args:
-            queries: List of input text strings
-            
-        Returns:
-            List of numpy arrays of dense embedding values
+        Handles '_Query_' prefix logic for BGE instruction.
         """
         try:
-            embeddings = list(self.dense_model.embed(queries))
+            # PROCESS INPUTS: Handle prefix logic
+            processed_queries = []
+            bge_instruction = "Represent this sentence for searching relevant passages: "
+            prefix = "_Query_"
+            
+            for q in queries:
+                if q.startswith(prefix):
+                    # 1. Trim the prefix
+                    trimmed_q = q[len(prefix):]
+                    # 2. Prepend BGE instruction (Only for dense)
+                    processed_queries.append(bge_instruction + trimmed_q)
+                else:
+                    # Passage: Leave as is
+                    processed_queries.append(q)
+
+            # Pass the processed list to the model
+            embeddings = list(self.dense_model.embed(processed_queries))
             return [emb.astype(np.float32) for emb in embeddings]
+            
         except Exception as e:
             logger.error(f"Error generating dense embeddings batch: {e}")
             raise
@@ -102,19 +114,61 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
     
     def _get_sparse_embeddings_batch(self, queries: List[str]) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
-        Generate sparse embeddings for multiple queries in a single batch
+        Generate sparse embeddings for multiple queries in a single batch.
         
-        Args:
-            queries: List of input text strings
-            
-        Returns:
-            List of tuples (indices, values) for each query
+        Splits the batch into 'queries' and 'passages' based on the '_Query_' prefix
+        to utilize the model's specialized query_embed vs passage_embed methods.
         """
         try:
-            sparse_results = list(self.sparse_model.embed(queries))
+            # 1. SEGREGATION
+            # We need to track original indices to reconstruct the order later
+            query_indices = []
+            query_texts = []
             
+            passage_indices = []
+            passage_texts = []
+            
+            prefix = "_Query_"
+            
+            for idx, q in enumerate(queries):
+                if q.startswith(prefix):
+                    # Found a Query: Trim prefix and add to query batch
+                    query_indices.append(idx)
+                    query_texts.append(q[len(prefix):])
+                else:
+                    # Found a Passage: Add as is
+                    passage_indices.append(idx)
+                    passage_texts.append(q)
+
+            # Prepare a list to hold results in the correct order (None as placeholder)
+            # This ensures index 0 in input maps to index 0 in output
+            all_sparse_results = [None] * len(queries)
+
+            # 2. EXECUTION
+            # Process Queries (if any)
+            if query_texts:
+                # Using the specific query_embed method as requested
+                q_results = list(self.sparse_model.query_embed(query_texts))
+                for i, res in enumerate(q_results):
+                    original_idx = query_indices[i]
+                    all_sparse_results[original_idx] = res
+
+            # Process Passages (if any)
+            if passage_texts:
+                # Using the specific passage_embed method as requested
+                p_results = list(self.sparse_model.passage_embed(passage_texts))
+                for i, res in enumerate(p_results):
+                    original_idx = passage_indices[i]
+                    all_sparse_results[original_idx] = res
+
+            # 3. FORMATTING
             embeddings = []
-            for sparse_result in sparse_results:
+            for sparse_result in all_sparse_results:
+                if sparse_result is None:
+                    # This should theoretically never happen given the logic above
+                    logger.error("Encountered None in sparse results reconstruction")
+                    raise ValueError("Sparse embedding generation failed for an item")
+
                 indices = np.array(sparse_result.indices, dtype=np.uint32)
                 values = np.array(sparse_result.values, dtype=np.float32)
                 embeddings.append((indices, values))
@@ -146,6 +200,8 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
                 return embeddingService_pb2.Embeddings()
             
             # Run dense and sparse embeddings concurrently for maximum performance
+            # Note: The input 'queries' list is passed to both; they handle their own
+            # string processing internally so there are no race conditions.
             dense_future = self.executor.submit(self._get_dense_embeddings_batch, queries)
             sparse_future = self.executor.submit(self._get_sparse_embeddings_batch, queries)
             
