@@ -33,6 +33,8 @@ func (m *MemoryServer) Run() error {
 	r := http.NewServeMux()
 	r.HandleFunc("/add_memory", convertToHandleFunc(m.InsertIntoMemory))
 	r.HandleFunc("/get_memory", convertToHandleFunc(m.GetMemory))
+	r.HandleFunc("/health", convertToHandleFunc(m.HealthCheck))
+
 	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
 		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
 		return err
@@ -68,7 +70,11 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 		}
 	}
 }
-
+func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIError {
+	slog.Info("Health check!")
+	writeJSON(w, http.StatusOK, "Server is healthy!")
+	return &APIError{}
+}
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")
 	req := &types.InsertMemoryRequest{}
