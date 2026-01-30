@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
@@ -121,6 +124,19 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	req.ReqId = reqId
 	if req.Messages != nil {
 		slog.Info("Messages type request came in here!", "reqId", reqId)
+		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
+		query := ConstructContextualQuery(req.Messages, 500)
+		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, ctx)
+		if err != nil {
+			slog.Error("Got this error while trying to get memories", "error", err)
+			return &APIError{
+				Message: "Memory Retrieval Failed!",
+				Error:   err,
+				Status:  http.StatusInternalServerError,
+			}
+		}
+		writeJSON(w, http.StatusOK, Memories)
+
 		return &APIError{
 			Message: "Messages format is not currently being supported! But we are working on it",
 			Error:   nil,
@@ -146,4 +162,81 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		Error:   nil,
 		Status:  http.StatusOK,
 	}
+}
+
+func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request) *APIError {
+	req := &types.GetAllUserMemoriesRequest{}
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		slog.Info("Got this error while decoding GetAllUserMemoriesRequest", "err", err)
+		return &APIError{
+			Message: "Bad request",
+			Status:  http.StatusBadRequest,
+			Error:   err,
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	defer cancel()
+	m.memory.GetAllUserMemories(req.UserId, ctx)
+	// select{
+	// case <- ctx.Done():
+	// 	slog.Info("Memory retrieval request timed out!", "userId", req.UserId)
+	// 	return &APIError{
+	// 		Message: "Retrieval Timed out",
+	// 		Status: http.StatusGatewayTimeout,
+	// 		Error: fmt.Errorf("Too Much Time taken!"),
+	// 	}
+
+	// }
+	return &APIError{}
+}
+
+func ConstructContextualQuery(messages []types.Message, charLimit int) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	var accumulatedParts []string
+	currentLen := 0
+
+	re := regexp.MustCompile(`[^.!?]+[.!?]+(\s|$)`)
+
+	// 1. Iterate BACKWARDS through messages (Latest -> Oldest)
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+
+		sentences := re.FindAllString(content, -1)
+		if len(sentences) == 0 {
+			sentences = []string{content}
+		}
+
+		var msgParts []string
+
+		for j := len(sentences) - 1; j >= 0; j-- {
+			sent := strings.TrimSpace(sentences[j])
+			msgParts = append([]string{sent}, msgParts...) // Prepend to keep order within message
+
+			currentLen += len(sent)
+
+			// Check limit inside the sentence loop
+			if currentLen >= charLimit {
+				break
+			}
+		}
+
+		finalMsgContent := strings.Join(msgParts, " ")
+
+		// Prepend this block to our master list of parts
+		accumulatedParts = append([]string{finalMsgContent}, accumulatedParts...)
+
+		if currentLen >= charLimit {
+			break
+		}
+	}
+
+	// Join all blocks with newlines to separate turns clearly
+	return strings.Join(accumulatedParts, "\n")
 }

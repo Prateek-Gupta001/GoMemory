@@ -12,6 +12,10 @@ type InsertMemoryRequest struct {
 	Messages []Message `json:"messages"`
 }
 
+type GetAllUserMemoriesRequest struct {
+	UserId string `json:"userId"`
+}
+
 const UserIdKey ctxKey = iota
 
 type ctxKey int

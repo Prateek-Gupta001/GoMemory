@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
@@ -94,11 +95,14 @@ func NewtestMemoryAgent() *MemoryAgent {
 
 func TestGetMemories(t *testing.T) {
 	agent := NewtestMemoryAgent()
+	start := time.Now()
 	m, err := agent.GetMemories("My car was towed yesterday what should I do?", "user_123", "1234", t.Context())
 	if err != nil {
 		t.Error("ERROR ", err)
 		t.Fail()
 	}
+	end := time.Since(start)
+	fmt.Println("Time taken for Getting Memories is", "time", end)
 	fmt.Println("Memories", m)
 
 }

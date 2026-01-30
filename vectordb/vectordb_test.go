@@ -13,5 +13,4 @@ func TestDeleteMemories(t *testing.T) {
 	if err != nil {
 		t.Error("Got this error while deleting memories", "error", err)
 	}
-
 }

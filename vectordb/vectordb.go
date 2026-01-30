@@ -13,6 +13,7 @@ type VectorDB interface {
 	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string, context.Context) ([]types.Memory, error)
 	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding, []string, string, context.Context) error
 	DeleteMemories([]string, context.Context) error
+	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 }
 
 type QdrantMemoryDB struct {
@@ -28,6 +29,7 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 		slog.Error("Got this error while trying to intialise the qdrant memory db!", "error", err)
 		panic(err)
 	}
+	// client.DeleteCollection(context.Background(),"Go_Memory_db")
 	exists, err1 := client.CollectionExists(context.Background(), "Go_Memory_db")
 	if err1 != nil {
 		slog.Error("Got this error while checking if collection exists or not!", "error", err1)
@@ -141,6 +143,40 @@ func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbeddi
 	}
 	slog.Info("Memory insertion was successful!")
 	return nil
+}
+
+func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error) {
+	res, err := qdb.Client.Scroll(ctx, &qdrant.ScrollPoints{
+		CollectionName: "Go_Memory_db",
+		Filter: &qdrant.Filter{
+			Must: []*qdrant.Condition{
+				qdrant.NewMatch("userId", userId),
+			},
+		},
+		WithPayload: qdrant.NewWithPayload(true),
+	})
+	if err != nil {
+		slog.Error("Got this error while trying to get all memories of the user", "error", err, "userId", userId)
+		return nil, err
+	}
+	var Memories []types.Memory
+	for _, r := range res {
+		y := r.Payload
+		slog.Info("memory is", "memory", y["Memory"].GetStringValue())
+		_, ok := y["Memory"]
+		if !ok {
+			slog.Error("Payload is missing 'Memory' key", "id", r.Id)
+			continue
+		}
+		Memories = append(Memories, types.Memory{
+			Memory_text: string(y["Memory"].GetStringValue()),
+			Memory_Id:   r.Id.GetUuid(),
+			UserId:      userId,
+		})
+
+	}
+	slog.Info("Similar Memories are being returned from qdrant!", "memories", Memories)
+	return Memories, nil
 }
 
 func (qdb *QdrantMemoryDB) DeleteMemories(memoryIds []string, ctx context.Context) error {

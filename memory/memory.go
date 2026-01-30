@@ -19,7 +19,7 @@ type Memory interface {
 	GetMemories(user_query string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) //For normal messages
 	DeleteMemory(payloadId string) error                                                                     //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
-	GetAllMemories(userId string) ([]types.Memory, error)
+	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
 }
 
@@ -89,7 +89,7 @@ func (m *MemoryAgent) DeleteMemory(payloadId string) error {
 
 func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take the messages and pass it to llm -> get query
-	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*500)
+	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel_ctx()
 	slog.Info("Insert Memory Request recieved!", "jobId", memjob.ReqId)
 	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
@@ -161,6 +161,15 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	return nil
 }
 
+func (m *MemoryAgent) GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error) {
+	mem, err := m.Vectordb.GetAllUserMemories(userId, ctx)
+	if err != nil {
+		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", userId)
+		return nil, err
+	}
+	return mem, nil
+}
+
 func LastUserContent(messages []types.Message) (string, bool) {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == types.RoleUser {
@@ -168,8 +177,4 @@ func LastUserContent(messages []types.Message) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func (m *MemoryAgent) GetAllMemories(userId string) ([]types.Memory, error) {
-	return nil, nil
 }
