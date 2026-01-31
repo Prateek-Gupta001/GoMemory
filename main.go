@@ -43,9 +43,23 @@ func main() {
 	if err != nil {
 		slog.Error("can't connect to NATS", "error", err)
 	}
+
+	js, err := nc.JetStream()
+	if err != nil {
+		panic(err)
+	}
 	slog.Info("NATS JetStream is up!")
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:     "MEMORY_SYSTEM",
+		Subjects: []string{"memory_work"},
+		// Storage:  nats.FileStorage,     //For production, uncomment this line! This will make our stuff persist in file and
+	}) //and allow us to not loose our memory jobs!
+	if err != nil {
+		panic(err)
+	}
+
 	defer nc.Close()
-	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, nc, 5000, 2)
+	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, 5000, 2)
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}

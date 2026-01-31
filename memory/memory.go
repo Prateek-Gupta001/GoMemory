@@ -27,15 +27,15 @@ type MemoryAgent struct {
 	Vectordb    vectordb.VectorDB
 	LLM         llm.LLM
 	EmbedClient embed.Embed
-	NatClient   *nats.Conn
+	JSClient    nats.JetStreamContext
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc *nats.Conn, queueLen int, numWorker int) (*MemoryAgent, error) {
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, queueLen int, numWorker int) (*MemoryAgent, error) {
 	m := &MemoryAgent{
 		Vectordb:    vectordb,
 		LLM:         llm,
 		EmbedClient: embedClient,
-		NatClient:   nc,
+		JSClient:    nc,
 	}
 	for i := 0; i < numWorker; i++ {
 		go m.MemoryWorker(i)
@@ -45,15 +45,22 @@ func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.E
 
 func (m *MemoryAgent) MemoryWorker(id int) {
 	slog.Info("Memory agent is up and running!", "id", id)
-	m.NatClient.Subscribe("memory_work", func(msg *nats.Msg) {
-		fmt.Printf("Worker got a memory Job: %s\n", string(msg.Data))
+	m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
+		fmt.Printf("----------------------------------- Worker got a memory Job: %s\n ----------------------------------- \n", string(msg.Data))
 		memJob := &types.MemoryInsertionJob{}
 		if err := json.Unmarshal(msg.Data, memJob); err != nil {
 			slog.Error("error while unmarshalling NATS-jetstream data", "error", err)
+			msg.Term()
+			return
 		}
 		if err := m.InsertMemory(memJob); err != nil {
 			slog.Info("Memory worker encountered an error while working", "error", err, "reqId", memJob.ReqId, "userId", memJob.UserId)
+			//TODO: Check from InsertMemory if its a deterministic error or not .. if its an API server issue or an OpenAI issue or an LLM issue
+			//TODO: .. You would wanna retry the job .. in that case .. otherwise not!
+			msg.Term()
+			return
 		}
+		msg.Ack()
 	})
 }
 
@@ -65,7 +72,7 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 		slog.Info("Got this error while marshalling the MemoryInsertionJob ", "error", err)
 		return err
 	}
-	err = m.NatClient.Publish("memory_work", memJson)
+	_, err = m.JSClient.Publish("memory_work", memJson)
 	return err
 }
 
@@ -93,11 +100,12 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	defer cancel_ctx()
 	slog.Info("Insert Memory Request recieved!", "jobId", memjob.ReqId)
 	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
-	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
+	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)
+
 	if strings.ToLower(expandedQuery) == "skip" {
 		slog.Info("Memory Insertion is NOT REQUIRED!", "messages", memjob.Messages)
 		return nil

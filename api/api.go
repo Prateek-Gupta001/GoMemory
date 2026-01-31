@@ -31,15 +31,15 @@ func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Mem
 
 func (m *MemoryServer) Run() error {
 	r := http.NewServeMux()
-	r.HandleFunc("/add_memory", convertToHandleFunc(m.InsertIntoMemory))
-	r.HandleFunc("/get_memory", convertToHandleFunc(m.GetMemory))
-	r.HandleFunc("/health", convertToHandleFunc(m.HealthCheck))
-
+	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
+	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
+	r.HandleFunc("POST /get_all", convertToHandleFunc(m.GetAllUserMemories)) //TODO: Make it a get request and send the userId via query params.
+	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
+	slog.Info("AI Memory is at your service Sire!")
 	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
 		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
 		return err
 	}
-	slog.Info("AI Memory is at your service Sire!")
 	return nil
 }
 
@@ -70,6 +70,7 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 		}
 	}
 }
+
 func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("Health check!")
 	writeJSON(w, http.StatusOK, "Server is healthy!")
@@ -121,7 +122,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
 		slog.Info("Got malformed JSON here in the Get Memory request", "error", err)
 		return &APIError{
-			Message: "malformed JSON here in the Get Memory request",
+			Message: "Malformed JSON here in the Get Memory request",
 			Error:   err,
 			Status:  http.StatusBadRequest,
 		}
@@ -182,7 +183,18 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
 	defer cancel()
-	m.memory.GetAllUserMemories(req.UserId, ctx)
+
+	mem, err := m.memory.GetAllUserMemories(req.UserId, ctx)
+	if err != nil {
+		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", req.UserId)
+		return &APIError{
+			Message: "Failed to get all user memories",
+			Status:  http.StatusInternalServerError,
+			Error:   err,
+		}
+	}
+	writeJSON(w, http.StatusOK, mem)
+	return &APIError{}
 	// select{
 	// case <- ctx.Done():
 	// 	slog.Info("Memory retrieval request timed out!", "userId", req.UserId)
@@ -193,7 +205,6 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 	// 	}
 
 	// }
-	return &APIError{}
 }
 
 func ConstructContextualQuery(messages []types.Message, charLimit int) string {

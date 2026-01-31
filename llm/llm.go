@@ -63,6 +63,7 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories [
 		return nil, err
 	}
 	slog.Info("Here are the thing being passed into the prompt", "Exisisting Memories", string(bytes), "UserInput", allUserText)
+	//TODO: Simiplify the Exisitng Memories to include simple integer IDs and map them back to their normal unique uuids
 
 	prompt = "<EXISTING_MEMORIES> \n" + string(bytes) + "\n </EXISTING_MEMORIES> \n" + "<USER_INPUT> \n" + allUserText + "\n </USER_INPUT>"
 	ptr := true

@@ -173,9 +173,8 @@ func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context
 			Memory_Id:   r.Id.GetUuid(),
 			UserId:      userId,
 		})
-
 	}
-	slog.Info("Similar Memories are being returned from qdrant!", "memories", Memories)
+	slog.Info("All the user Memories are being returned from qdrant!", "memories", Memories)
 	return Memories, nil
 }
 
