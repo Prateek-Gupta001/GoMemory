@@ -17,7 +17,7 @@ import (
 
 type Memory interface {
 	GetMemories(user_query string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) //For normal messages
-	DeleteMemory(payloadId string) error                                                                     //from the db
+	DeleteMemory(memoryIds []string, ctx context.Context) error                                              //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
@@ -90,7 +90,11 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, ctx 
 	return Memories, nil
 }
 
-func (m *MemoryAgent) DeleteMemory(payloadId string) error {
+func (m *MemoryAgent) DeleteMemory(memoryIds []string, ctx context.Context) error {
+	err := m.Vectordb.DeleteMemories(memoryIds, ctx)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

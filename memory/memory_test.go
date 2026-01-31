@@ -87,11 +87,6 @@ func TestSumbitMemoryInsertionRequest(t *testing.T) {
 	time.Sleep(time.Second * 4)
 }
 
-func newTestMemoryWorker(id int) {
-	slog.Info("Memory agent is up and running!", "id", id)
-
-}
-
 func TestInsertMemory(t *testing.T) {
 	agent := NewtestMemoryAgent()
 	memJob := types.MemoryInsertionJob{

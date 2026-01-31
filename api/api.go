@@ -35,6 +35,7 @@ func (m *MemoryServer) Run() error {
 	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
 	r.HandleFunc("POST /get_all", convertToHandleFunc(m.GetAllUserMemories)) //TODO: Make it a get request and send the userId via query params.
 	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
+	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
 	slog.Info("AI Memory is at your service Sire!")
 	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
 		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
@@ -64,9 +65,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := f(w, r); err.Error != nil {
-			slog.Error("Got this error in the request handler", "error", err.Error)
-			writeJSON(w, err.Status, err.Message)
+		if apiError := f(w, r); apiError.Error != nil {
+			slog.Error("Got this error in the request handler", "error", apiError.Error)
+			writeJSON(w, apiError.Status, apiError.Message)
 		}
 	}
 }
@@ -108,10 +109,7 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 		ReqId: reqId,
 		Msg:   "Memory Insertion Job has been queued for insertion!",
 	})
-	return &APIError{
-		Error:  nil,
-		Status: http.StatusOK,
-	}
+	return nil
 }
 
 func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIError {
@@ -164,11 +162,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		}
 		writeJSON(w, http.StatusOK, Memories)
 	}
-	return &APIError{
-		Message: "Memory Retrieval was succesful",
-		Error:   nil,
-		Status:  http.StatusOK,
-	}
+	return nil
 }
 
 func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request) *APIError {
@@ -194,7 +188,7 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 		}
 	}
 	writeJSON(w, http.StatusOK, mem)
-	return &APIError{}
+	return nil
 	// select{
 	// case <- ctx.Done():
 	// 	slog.Info("Memory retrieval request timed out!", "userId", req.UserId)
@@ -205,6 +199,33 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 	// 	}
 
 	// }
+}
+
+func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	req := &types.DeleteMemoryRequest{}
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		return &APIError{
+			Message: "Bad request",
+			Error:   err,
+			Status:  http.StatusBadRequest,
+		}
+	}
+
+	err := m.memory.DeleteMemory(req.MemoryIds, r.Context())
+	if err != nil {
+		slog.Error("Got this error while trying to delete memory", "error", err, "userId", req.UserId)
+		return &APIError{
+			Message: "Deletion failed",
+			Error:   err,
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	return &APIError{
+		Error:   nil,
+		Message: "Memory Deletion succesful",
+		Status:  http.StatusOK,
+	}
 }
 
 func ConstructContextualQuery(messages []types.Message, charLimit int) string {

@@ -16,6 +16,11 @@ type GetAllUserMemoriesRequest struct {
 	UserId string `json:"userId"`
 }
 
+type DeleteMemoryRequest struct {
+	UserId    string   `json:"userId"`
+	MemoryIds []string `json:"memoryId"`
+}
+
 const UserIdKey ctxKey = iota
 
 type ctxKey int

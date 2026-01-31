@@ -2,6 +2,7 @@ package vectordb
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
@@ -197,6 +198,10 @@ func (qdb *QdrantMemoryDB) DeleteMemories(memoryIds []string, ctx context.Contex
 	slog.Info("Did we find as many memories as there are Ids", "num of memoryIds", len(memoryIds), "num of retrieved results", len(retrieveResp))
 	if len(retrieveResp) != len(memoryIds) {
 		slog.Info("LLM Probably hallucinated and gave an invalid memory id ... it doesn't exist in the db")
+	}
+	if len(retrieveResp) == 0 {
+		slog.Info("No points found!", "points", memoryIds)
+		return fmt.Errorf("No points found!")
 	}
 	_, err = qdb.Client.Delete(ctx, &qdrant.DeletePoints{
 		CollectionName: "Go_Memory_db",
