@@ -16,8 +16,8 @@ import (
 )
 
 type Memory interface {
-	GetMemories(user_query string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) //For normal messages
-	DeleteMemory(memoryIds []string, ctx context.Context) error                                              //from the db
+	GetMemories(user_query string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) //For normal messages
+	DeleteMemory(memoryIds []string, ctx context.Context) error                                                                 //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
@@ -76,13 +76,13 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 	return err
 }
 
-func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, ctx context.Context) ([]types.Memory, error) {
+func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
 	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text})
 	if err != nil {
 		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)
 		return nil, err
 	}
-	Memories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, ctx)
+	Memories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, threshold, ctx)
 	if err != nil {
 		slog.Error("Got this error while getting similar memories!", "error", err, "reqId", reqId)
 		return nil, err
@@ -123,7 +123,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take query and pass it to qdrant
 	//Here len of Embedding will be 0
 	slog.Info("Len of the emebddings should be in harmony", "len(DenseEmbedding)", len(DenseEmbedding), "len(SparseEmbedding)", len(SparseEmbedding), "num", 1)
-	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, ctx)
+	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, memjob.Threshold, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 		return err

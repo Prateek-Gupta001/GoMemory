@@ -11,7 +11,7 @@ import (
 )
 
 type VectorDB interface {
-	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string, context.Context) ([]types.Memory, error)
+	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string, float32, context.Context) ([]types.Memory, error)
 	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding, []string, string, context.Context) error
 	DeleteMemories([]string, context.Context) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
@@ -71,14 +71,15 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	}, nil
 }
 
-func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string, ctx context.Context) ([]types.Memory, error) {
+func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
 	res, err := qdb.Client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: "Go_Memory_db",
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				qdrant.NewMatch("userId", userId),
 			}},
-		WithPayload: qdrant.NewWithPayload(true),
+		ScoreThreshold: &threshold,
+		WithPayload:    qdrant.NewWithPayload(true),
 		Prefetch: []*qdrant.PrefetchQuery{
 			{
 				Query: qdrant.NewQuerySparse(SparseEmbedding.Indices, SparseEmbedding.Values),

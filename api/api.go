@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -33,7 +34,7 @@ func (m *MemoryServer) Run() error {
 	r := http.NewServeMux()
 	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
 	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
-	r.HandleFunc("POST /get_all", convertToHandleFunc(m.GetAllUserMemories)) //TODO: Make it a get request and send the userId via query params.
+	r.HandleFunc("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
 	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
 	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
 	slog.Info("AI Memory is at your service Sire!")
@@ -65,9 +66,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if apiError := f(w, r); apiError.Error != nil {
-			slog.Error("Got this error in the request handler", "error", apiError.Error)
-			writeJSON(w, apiError.Status, apiError.Message)
+		apiError := f(w, r)
+		if apiError != nil {
+			slog.Error("Got this error from an http handler func", "error", apiError.Error)
+			writeJSON(w, apiError.Status, struct{ Error string }{Error: apiError.Message})
 		}
 	}
 }
@@ -92,9 +94,10 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	reqId := uuid.NewString()
 	slog.Info("request Id intialised", "reqId", reqId)
 	memJob := types.MemoryInsertionJob{
-		Messages: req.Messages,
-		ReqId:    reqId,
-		UserId:   req.UserId,
+		Messages:  req.Messages,
+		ReqId:     reqId,
+		UserId:    req.UserId,
+		Threshold: 0.6,
 	}
 	err := m.memory.SumbitMemoryInsertionRequest(memJob)
 	if err != nil {
@@ -125,13 +128,16 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			Status:  http.StatusBadRequest,
 		}
 	}
+	if req.Threshold == 0 {
+		req.Threshold = 0.65
+	}
 	reqId := uuid.NewString()
 	req.ReqId = reqId
 	if req.Messages != nil {
 		slog.Info("Messages type request came in here!", "reqId", reqId)
 		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
 		query := ConstructContextualQuery(req.Messages, 500)
-		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, ctx)
+		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, ctx)
 		if err != nil {
 			slog.Error("Got this error while trying to get memories", "error", err)
 			return &APIError{
@@ -151,7 +157,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	if req.UserQuery != "" {
 		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)
 		userQuery := req.UserQuery
-		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, ctx)
+		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, req.Threshold, ctx)
 		if err != nil {
 			slog.Error("Got this error while trying to get memories", "error", err)
 			return &APIError{
@@ -165,22 +171,36 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	return nil
 }
 
+func GetId(r *http.Request) (string, error) {
+	id := r.PathValue("id")
+	cleanId := strings.Trim(id, "\"' ")
+
+	slog.Info("parsing id", "raw", id, "clean", cleanId)
+
+	// 2. Validate: Check if it is empty AFTER cleaning
+	if cleanId == "" {
+		return "", fmt.Errorf("ID provided is empty or invalid")
+	}
+
+	return cleanId, nil
+}
+
 func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request) *APIError {
-	req := &types.GetAllUserMemoriesRequest{}
-	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
-		slog.Info("Got this error while decoding GetAllUserMemoriesRequest", "err", err)
+	userId, err := GetId(r)
+	if err != nil {
+		slog.Error("Got this error while getting Id for GetAllUserMemories", "error", err)
 		return &APIError{
-			Message: "Bad request",
-			Status:  http.StatusBadRequest,
 			Error:   err,
+			Message: "Bad Request",
+			Status:  http.StatusBadRequest,
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
 	defer cancel()
 
-	mem, err := m.memory.GetAllUserMemories(req.UserId, ctx)
+	mem, err := m.memory.GetAllUserMemories(userId, ctx)
 	if err != nil {
-		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", req.UserId)
+		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", userId)
 		return &APIError{
 			Message: "Failed to get all user memories",
 			Status:  http.StatusInternalServerError,

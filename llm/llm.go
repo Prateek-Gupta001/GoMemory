@@ -114,7 +114,7 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories [
 		// CRITICAL: The order in this slice dictates the generation order
 		Required: []string{"step_1 reasoning_scratchpad", "step_2 memory_actions"},
 	}
-	//TODO: Think of whether we should just pass allUserText type thing in ExpandQuery function as well ...
+	//TODO: Think of whether we should just pass allUserText type thing in ExpandQuery function as well ..
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(`### ROLE
 You are the **Memory Archivist**, an advanced neural interface responsible for maintaining a high-fidelity, long-term database of user facts. 

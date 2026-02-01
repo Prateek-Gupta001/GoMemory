@@ -109,7 +109,7 @@ func TestInsertMemory(t *testing.T) {
 func TestGetMemories(t *testing.T) {
 	agent := NewtestMemoryAgent()
 	start := time.Now()
-	m, err := agent.GetMemories("My car was towed yesterday what should I do?", "user_123", "1234", t.Context())
+	m, err := agent.GetMemories("My car was towed yesterday what should I do?", "user_123", "1234", 0.65, t.Context())
 	if err != nil {
 		t.Error("ERROR ", err)
 		t.Fail()

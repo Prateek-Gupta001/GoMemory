@@ -4,6 +4,7 @@ type MemoryRetrievalRequest struct {
 	UserId    string    `json:"userId"`
 	Messages  []Message `json:"messages,omitempty"`
 	UserQuery string    `json:"query,omitempty"`
+	Threshold float32   `json:"threshold,omitempty"`
 	ReqId     string
 }
 
@@ -39,9 +40,10 @@ type Message struct {
 }
 
 type MemoryInsertionJob struct {
-	ReqId    string
-	UserId   string
-	Messages []Message
+	ReqId     string
+	UserId    string
+	Messages  []Message
+	Threshold float32
 }
 
 type DenseEmbedding struct {
