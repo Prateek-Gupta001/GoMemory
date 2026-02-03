@@ -106,6 +106,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
+		//generally a
 		return err
 	}
 	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)

@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
+	"time"
+	"os"
+
+	"math/rand"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/genai"
 )
 
@@ -23,6 +27,7 @@ type GeminiLLM struct {
 }
 
 func NewGeminiLLM() (*GeminiLLM, error) {
+
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey: os.Getenv("gemini_api_key"),
 	})
@@ -161,20 +166,41 @@ You will receive:
 		ResponseJsonSchema: responseSchema,
 	}
 
-	result, err := llm.GeminiClient.Models.GenerateContent(
-		ctx,
-		"gemini-3-flash-preview",
-		genai.Text(prompt),
-		config,
-	)
+	var result *genai.GenerateContentResponse
+	for i := 0; i < 5; i++ {
+		result, err = llm.GeminiClient.Models.GenerateContent(
+			ctx,
+			"gemini-3-flash-preview",
+			genai.Text(prompt),
+			config)
+		if err == nil {
+			break
+		}
+		if !RetryAbleError(err) {
+			return nil, err
+		}
+		backoff := time.Duration(1<<i) * time.Second
+		jitter := time.Duration(rand.Int63n(int64(backoff)/5*2) - int64(backoff)/5)
+		retryDuration := backoff + jitter
+		slog.Error("Got this error while generating memory text.. in the llm call. Retrying after some time", "error", err, "time", retryDuration)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryDuration):
+		}
+		slog.Info("Retrying!")
+	}
+
 	if err != nil {
 		slog.Error("Got this error while generating memory text.. in the llm call.", "error", err)
 		return nil, err
 	}
-	fmt.Println("res: ", result.Text())
+	fmt.Println("result text: ", result.Text())
 	memoryOutput := &types.MemoryOutput{}
 	if err := json.NewDecoder(strings.NewReader(result.Text())).Decode(memoryOutput); err != nil {
 		slog.Error("Got malformed JSON output from the LLM", "error", err)
+		return nil, err
 	}
 
 	return memoryOutput, nil
@@ -183,7 +209,7 @@ You will receive:
 func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context) (string, error) {
 	history := GetGeminiHistory(messages)
 	chat, _ := llm.GeminiClient.Chats.Create(ctx, "gemini-3-flash-preview", nil, history)
-	res, err := chat.SendMessage(ctx, genai.Part{Text: ` 
+	expandQueryPrompt := ` 
 	--- SYSTEM INSTRUCTION ---
 	### Role
 	You are a Memory Query Generator. Your goal is to generate a search query to check a vector database for EXISTING memories that might conflict with or relate to the conversation history provided to you.
@@ -207,7 +233,29 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 
 	### Output
 	Return ONLY the query string or "SKIP". Do not add markdown or explanations.
-	`})
+	`
+
+	//TODO: Test this properly .... can cause error maybe ....
+	var res *genai.GenerateContentResponse
+	var err error
+	for i := 0; i < 5; i++ {
+		res, err = chat.SendMessage(ctx, genai.Part{Text: expandQueryPrompt})
+
+		if err == nil {
+			break
+		}
+		backoff := time.Duration(1<<i) * time.Second
+		jitter := time.Duration(rand.Int63n(int64(backoff)/5*2) - int64(backoff)/5)
+		retryDuration := backoff + jitter
+		slog.Error("Got this error while generating memory text.. in the llm call. Retrying after some time", "error", err, "time", retryDuration)
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(retryDuration):
+		}
+		slog.Info("Retrying!")
+	}
 
 	if err != nil {
 		slog.Error("Got this error while trying to Expand Query", "error", err)
@@ -215,6 +263,20 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 	}
 
 	return res.Text(), nil
+}
+
+func RetryAbleError(err error) bool {
+	if gErr, ok := err.(*googleapi.Error); ok {
+		slog.Info("Retryable Error", "errcode", gErr.Code)
+		if gErr.Code >= 500 {
+			return true
+		}
+		if gErr.Code == 429 {
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 func GetGeminiHistory(messages []types.Message) []*genai.Content {

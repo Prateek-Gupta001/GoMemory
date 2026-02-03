@@ -15,7 +15,7 @@ func TestGenerateMemoryText(t *testing.T) {
 	messagesCase3 := []types.Message{
 		{
 			Role:    types.RoleUser,
-			Content: "Regarding my backend work, I'm specifically using Go with Gin and GORM for the API layer. Do you know any cool stuff about cars? I own a Honda civic .. which is pretty dang fast .. but a little rusty imo .. lmao",
+			Content: "Hi",
 		},
 	}
 
