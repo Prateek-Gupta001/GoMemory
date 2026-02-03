@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"time"
-	"os"
 
 	"math/rand"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
+	"github.com/joho/godotenv"
+
+	// "github.com/google/uuid"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/genai"
 )
@@ -27,6 +31,10 @@ type GeminiLLM struct {
 }
 
 func NewGeminiLLM() (*GeminiLLM, error) {
+	err := godotenv.Load()
+	if err != nil {
+		slog.Error("got this error while trying to load a dotenv file", "error", err)
+	}
 
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey: os.Getenv("gemini_api_key"),
@@ -42,8 +50,8 @@ func NewGeminiLLM() (*GeminiLLM, error) {
 }
 
 type Existing_Memory struct {
-	Memory_text string
-	MemoryId    string
+	Memory_text string `json:"text"`
+	MemoryId    string `json:"id"`
 }
 
 func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
@@ -51,17 +59,36 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories [
 	var allUserText string
 	var prompt string
 	var Existing_Memories []Existing_Memory
+	var sb strings.Builder
 	for _, msg := range messages {
 		if msg.Role == types.RoleUser {
-			allUserText += msg.Content
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n")
 		}
 	}
-	for _, m := range oldMemories {
+	allUserText = sb.String()
+	type DoubleMap struct {
+		UUIDtoInt map[string]string
+		IntTOUUID map[string]string
+	}
+	UUIDtoInt := make(map[string]string)
+	UIntTOUUID := make(map[string]string)
+	dMap := DoubleMap{
+		UUIDtoInt: UUIDtoInt,
+		IntTOUUID: UIntTOUUID,
+	}
+
+	for idx, m := range oldMemories {
+		dMap.UUIDtoInt[m.Memory_Id] = strconv.Itoa(idx)
+		dMap.IntTOUUID[strconv.Itoa(idx)] = m.Memory_Id
 		Existing_Memories = append(Existing_Memories, Existing_Memory{
 			Memory_text: m.Memory_text,
-			MemoryId:    m.Memory_Id,
+			MemoryId:    dMap.UUIDtoInt[m.Memory_Id],
 		})
+
 	}
+
+	slog.Info("Here is the mapping here", "map", dMap)
 	bytes, err := json.MarshalIndent(Existing_Memories, "", " ")
 	if err != nil {
 		slog.Error("Got this error while doing json.MarshalIndent.. and while generating memory text", "err", err)
@@ -168,6 +195,7 @@ You will receive:
 
 	var result *genai.GenerateContentResponse
 	for i := 0; i < 5; i++ {
+		slog.Info("In the for loop for response generation!")
 		result, err = llm.GeminiClient.Models.GenerateContent(
 			ctx,
 			"gemini-3-flash-preview",
@@ -198,9 +226,23 @@ You will receive:
 	}
 	fmt.Println("result text: ", result.Text())
 	memoryOutput := &types.MemoryOutput{}
+
 	if err := json.NewDecoder(strings.NewReader(result.Text())).Decode(memoryOutput); err != nil {
 		slog.Error("Got malformed JSON output from the LLM", "error", err)
 		return nil, err
+	}
+	for idx, _ := range memoryOutput.Actions {
+		if memoryOutput.Actions[idx].ActionType == "DELETE" {
+			slog.Info("Have Delete")
+			if memoryOutput.Actions[idx].TargetMemoryID != nil {
+				slog.Info("Have id", "id", *memoryOutput.Actions[idx].TargetMemoryID)
+				id := *memoryOutput.Actions[idx].TargetMemoryID
+				uuid := dMap.IntTOUUID[id]
+				memoryOutput.Actions[idx].TargetMemoryID = &uuid
+				slog.Info("Swapping it for this id", "new_id", *memoryOutput.Actions[idx].TargetMemoryID)
+			}
+		}
+
 	}
 
 	return memoryOutput, nil

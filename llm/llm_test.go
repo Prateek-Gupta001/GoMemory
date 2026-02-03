@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
@@ -15,7 +16,7 @@ func TestGenerateMemoryText(t *testing.T) {
 	messagesCase3 := []types.Message{
 		{
 			Role:    types.RoleUser,
-			Content: "Hi",
+			Content: "Yo me and that bitch are back together AND I got the kids ... let's fucking go boiii",
 		},
 	}
 
@@ -27,9 +28,13 @@ func TestGenerateMemoryText(t *testing.T) {
 		},
 		{
 			Memory_Id:   "mem_02",
-			Memory_text: "User has a golden retriever.",
+			Memory_text: "User has children and is currently undergoing a divorce from his wife.",
 			UserId:      "user_123",
 		},
 	}
-	llm.GenerateMemoryText(messagesCase3, oldMemoriesCase3, context.Background())
+	res, err := llm.GenerateMemoryText(messagesCase3, oldMemoriesCase3, context.Background())
+	if err != nil {
+		slog.Warn("Got this error", "error", err)
+	}
+	slog.Info("res ", "res", res)
 }
