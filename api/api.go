@@ -129,6 +129,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		}
 	}
 	if req.Threshold == 0 {
+		slog.Info("threshold wasn't provided by default .. using the default value")
 		req.Threshold = 0.65
 	}
 	reqId := uuid.NewString()
@@ -147,12 +148,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			}
 		}
 		writeJSON(w, http.StatusOK, Memories)
-
-		return &APIError{
-			Message: "Messages format is not currently being supported! But we are working on it",
-			Error:   nil,
-			Status:  200,
-		}
+		return nil
 	}
 	if req.UserQuery != "" {
 		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)

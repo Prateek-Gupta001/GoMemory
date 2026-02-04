@@ -1,4 +1,3 @@
-
 services:
   # NATS with JetStream enabled
   nats:
@@ -30,7 +29,12 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
 
-# This section was missing or commented out, causing the error.
-# It registers "pg_data" so Docker knows it exists.
+  # Python Embedding Microservice
+  embedding:
+    image: prateek329/embedding-service
+    container_name: embedding-microservice
+    ports:
+      - "50051:50051"
+
 volumes:
   pg_data:
