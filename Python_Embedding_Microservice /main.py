@@ -10,7 +10,8 @@ from concurrent import futures
 import numpy as np
 import logging
 from typing import List, Tuple
-import asyncio
+import os
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
 from fastembed import TextEmbedding, SparseTextEmbedding
@@ -274,7 +275,14 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             return embeddingService_pb2.DenseEmbedding()
 
 
-def serve(port=50051, max_workers=10):
+
+# 1. Try to load .env file (useful for local dev, ignored if file missing)
+load_dotenv()
+
+# 2. Get PORT from Environment, default to 50051 if missing
+port = os.getenv("PORT", "50051")
+
+def serve(port=port, max_workers=10):
     """
     Start the gRPC server
     
