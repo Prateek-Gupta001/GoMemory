@@ -16,18 +16,20 @@ func TestGenerateMemoryText(t *testing.T) {
 	messagesCase3 := []types.Message{
 		{
 			Role:    types.RoleUser,
-			Content: "Yo me and that bitch are back together AND I got the kids ... let's fucking go boiii",
+			Content: "Hey there bro what's up!",
 		},
 	}
 
 	oldMemoriesCase3 := []types.Memory{
 		{
 			Memory_Id:   "mem_01", // <--- Targeted for DELETE (too vague)
+			Type:        types.MemoryTypeGeneral,
 			Memory_text: "User works on backend systems.",
 			UserId:      "user_123",
 		},
 		{
 			Memory_Id:   "mem_02",
+			Type:        types.MemoryTypeGeneral,
 			Memory_text: "User has children and is currently undergoing a divorce from his wife.",
 			UserId:      "user_123",
 		},

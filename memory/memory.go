@@ -10,6 +10,7 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
+	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/nats-io/nats.go"
@@ -24,18 +25,20 @@ type Memory interface {
 }
 
 type MemoryAgent struct {
-	Vectordb    vectordb.VectorDB
-	LLM         llm.LLM
-	EmbedClient embed.Embed
-	JSClient    nats.JetStreamContext
+	Vectordb        vectordb.VectorDB
+	LLM             llm.LLM
+	EmbedClient     embed.Embed
+	CoreMemoryCache redis.CoreMemoryCache
+	JSClient        nats.JetStreamContext
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, queueLen int, numWorker int) (*MemoryAgent, error) {
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.CoreMemoryCache, queueLen int, numWorker int) (*MemoryAgent, error) {
 	m := &MemoryAgent{
-		Vectordb:    vectordb,
-		LLM:         llm,
-		EmbedClient: embedClient,
-		JSClient:    nc,
+		Vectordb:        vectordb,
+		LLM:             llm,
+		EmbedClient:     embedClient,
+		CoreMemoryCache: RC,
+		JSClient:        nc,
 	}
 	for i := 0; i < numWorker; i++ {
 		go m.MemoryWorker(i)
@@ -78,15 +81,20 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 
 func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
 	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text})
+	//TODO: Make these two independent requests concurrent using goroutines and waitgroups, errgroups. Here AND in GetAllUserMemories.
 	if err != nil {
 		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)
 		return nil, err
 	}
-	Memories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, threshold, ctx)
+	GeneralMemories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, threshold, ctx)
 	if err != nil {
-		slog.Error("Got this error while getting similar memories!", "error", err, "reqId", reqId)
-		return nil, err
+		slog.Warn("Got this error while getting similar memories! Trying to get Core Memories now", "error", err, "reqId", reqId)
 	}
+	CoreMemories, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	if err != nil {
+		slog.Info("Got this error while trying to get core memories", "userId", userId, "error", err)
+	}
+	Memories := append(CoreMemories, GeneralMemories...)
 	return Memories, nil
 }
 
@@ -103,12 +111,8 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel_ctx()
 	slog.Info("Insert Memory Request recieved!", "jobId", memjob.ReqId)
-	expandedQuery, err := m.LLM.ExpandQuery(memjob.Messages, ctx)
-	if err != nil {
-		slog.Info("Got this error message here while trying to generate expanded query", "error", err, "reqId", memjob.ReqId)
-		//generally a
-		return err
-	}
+	expandedQuery := m.LLM.ExpandQuery(memjob.Messages, ctx)
+
 	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)
 
 	if strings.ToLower(expandedQuery) == "skip" {
@@ -124,20 +128,23 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take query and pass it to qdrant
 	//Here len of Embedding will be 0
 	slog.Info("Len of the emebddings should be in harmony", "len(DenseEmbedding)", len(DenseEmbedding), "len(SparseEmbedding)", len(SparseEmbedding), "num", 1)
-	similarityResults, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, memjob.Threshold, ctx)
+	Existing_General_Memories, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, memjob.Threshold, ctx)
 	if err != nil {
-		slog.Info("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
-		return err
+		slog.Warn("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
+	}
+	Existing_Core_Memories, err := m.CoreMemoryCache.GetCoreMemory(memjob.UserId, ctx)
+	if err != nil {
+		slog.Info("Got this ")
 	}
 	//get the results and pass it to llm
-	MemoryOutput, err := m.LLM.GenerateMemoryText(memjob.Messages, similarityResults, ctx)
+	MemoryOutput, err := m.LLM.GenerateMemoryText(memjob.Messages, Existing_Core_Memories, Existing_General_Memories, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate new memory text", "error", err, "reqId", memjob.ReqId)
 		return err
 	}
 	var memories []string
 	var memoryIds []string //These are the memory ids to be deleted from the database!!
-	for _, memory := range MemoryOutput.Actions {
+	for _, memory := range MemoryOutput.GeneralMemoryActions {
 		if memory.ActionType == "INSERT" {
 			slog.Info("got an insert!")
 			if memory.TargetMemoryID != nil {
@@ -175,12 +182,16 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 }
 
 func (m *MemoryAgent) GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error) {
-	mem, err := m.Vectordb.GetAllUserMemories(userId, ctx)
+	Generalmem, err := m.Vectordb.GetAllUserMemories(userId, ctx)
 	if err != nil {
-		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", userId)
-		return nil, err
+		slog.Warn("Got this error while trying to get general  memories of the user (in the memory agent)", "error", err, "userId", userId)
 	}
-	return mem, nil
+	CoreMem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	if err != nil {
+		slog.Warn("Got this error while trying to get core memories of the user (in the memory agent)", "error", err, "userId", userId)
+	}
+	AllMem := append(CoreMem, Generalmem...)
+	return AllMem, nil
 }
 
 func LastUserContent(messages []types.Message) (string, bool) {

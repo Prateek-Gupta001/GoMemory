@@ -9,6 +9,7 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/llm"
 	logger "github.com/Prateek-Gupta001/GoMemory/log"
 	"github.com/Prateek-Gupta001/GoMemory/memory"
+	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/joho/godotenv"
@@ -59,7 +60,8 @@ func main() {
 	}
 
 	defer nc.Close()
-	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, 5000, 2)
+	RC := redis.NewRedisCoreMemoryCache()
+	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, RC, 5000, 2)
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}

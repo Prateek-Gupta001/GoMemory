@@ -135,6 +135,13 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	reqId := uuid.NewString()
 	req.ReqId = reqId
 	if req.Messages != nil {
+		if len(req.Messages) == 0 {
+			return &APIError{
+				Status:  http.StatusBadRequest,
+				Message: "Need atleast one message",
+				Error:   fmt.Errorf("len(messages) == 0"),
+			}
+		}
 		slog.Info("Messages type request came in here!", "reqId", reqId)
 		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
 		query := ConstructContextualQuery(req.Messages, 500)
