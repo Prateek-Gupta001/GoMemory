@@ -13,7 +13,10 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Memory interface {
@@ -21,6 +24,7 @@ type Memory interface {
 	DeleteMemory(memoryIds []string, ctx context.Context) error                                                                 //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
+	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	// in the future: delete user's memories and delete memory by Id...
 }
 
@@ -46,8 +50,9 @@ func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.E
 	return m, nil
 }
 
+var Tracer = otel.Tracer("Go-Memory")
+
 func (m *MemoryAgent) MemoryWorker(id int) {
-	slog.Info("Memory agent is up and running!", "id", id)
 	m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
 		fmt.Printf("----------------------------------- Worker got a memory Job: %s\n ----------------------------------- \n", string(msg.Data))
 		memJob := &types.MemoryInsertionJob{}
@@ -79,8 +84,17 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 	return err
 }
 
+func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error) {
+	mem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	if err != nil {
+		slog.Info("Got this error while trying to get the core memories of the user", "userId", userId)
+		return nil, err
+	}
+	return mem, nil
+}
+
 func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
-	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text})
+	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text}, ctx)
 	//TODO: Make these two independent requests concurrent using goroutines and waitgroups, errgroups. Here AND in GetAllUserMemories.
 	if err != nil {
 		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)
@@ -109,6 +123,11 @@ func (m *MemoryAgent) DeleteMemory(memoryIds []string, ctx context.Context) erro
 func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take the messages and pass it to llm -> get query
 	ctx, cancel_ctx := context.WithTimeout(context.Background(), time.Second*60)
+	ctx, span := Tracer.Start(ctx, "Insert Memory")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("userId", memjob.UserId),
+		attribute.String("reqId", memjob.ReqId))
 	defer cancel_ctx()
 	slog.Info("Insert Memory Request recieved!", "jobId", memjob.ReqId)
 	expandedQuery := m.LLM.ExpandQuery(memjob.Messages, ctx)
@@ -116,11 +135,14 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	slog.Info("Expanded query has been prepared by the LLM!", "query", expandedQuery)
 
 	if strings.ToLower(expandedQuery) == "skip" {
+		span.SetAttributes(attribute.Bool("memory insertion required", false))
 		slog.Info("Memory Insertion is NOT REQUIRED!", "messages", memjob.Messages)
 		return nil
 	}
+	span.SetAttributes(attribute.Bool("memory insertion required", true))
+
 	slog.Info("Preparing Embedding Generation!")
-	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + expandedQuery})
+	DenseEmbedding, SparseEmbedding, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + expandedQuery}, ctx)
 	if err != nil {
 		slog.Info("Got this error message here while trying to generate expanded query Embeddings", "error", err, "reqId", memjob.ReqId)
 		return err
@@ -134,7 +156,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	}
 	Existing_Core_Memories, err := m.CoreMemoryCache.GetCoreMemory(memjob.UserId, ctx)
 	if err != nil {
-		slog.Info("Got this ")
+		slog.Warn("Got this as the ERROR while getting exisiting core memories", "userId", memjob.UserId, "err", err)
 	}
 	//get the results and pass it to llm
 	MemoryOutput, err := m.LLM.GenerateMemoryText(memjob.Messages, Existing_Core_Memories, Existing_General_Memories, ctx)
@@ -160,8 +182,62 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 			memoryIds = append(memoryIds, *memory.TargetMemoryID)
 		}
 	}
+	//TODO: Handle the Core Memory Actions/Updations
+	//We will just create the update CoreMemories list ... taking in the existing ones and updating them in the variable only
+	//and then pushing that variable to redis.
 
-	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(memories)
+	var updated bool
+	var CoreMemories []types.Memory
+	idsToDelete := make(map[string]bool)
+	for _, memory := range MemoryOutput.CoreMemoryActions {
+		updated = true
+		if memory.ActionType == "INSERT" {
+			slog.Info("got an insert!")
+			if memory.TargetMemoryID != nil {
+				slog.Info("Damn .. llm made a mistake and gave a target memory Id in an INSERT request", "targetMemoryId", memory.TargetMemoryID)
+			}
+			if memory.Payload == nil {
+				slog.Warn("LLM made a mistake and didn't provide a payload in Insert.. skipping")
+				continue
+			}
+
+			id, _ := uuid.NewUUID()
+			CoreMemories = append(CoreMemories, types.Memory{
+				Memory_text: *memory.Payload,
+				Memory_Id:   id.String(),
+				Type:        types.MemoryTypeCore,
+				UserId:      memjob.UserId,
+			})
+		}
+		if memory.ActionType == "DELETE" {
+			slog.Info("got a DELETE!")
+			if memory.Payload != nil {
+				slog.Warn("Damn .. llm made a mistake and gave a payload in an DELETE request", "payload", memory.Payload)
+			}
+			if memory.TargetMemoryID == nil {
+				slog.Warn("LLM made a mistake and didn't provide a target memory Id in delete.. skipping")
+				continue
+			}
+			idsToDelete[*memory.TargetMemoryID] = true
+		}
+	}
+	var UpdatedCoreMemories []types.Memory
+	for _, mem := range Existing_Core_Memories {
+		if !idsToDelete[mem.Memory_Id] {
+			UpdatedCoreMemories = append(UpdatedCoreMemories, mem)
+		}
+	}
+	NewMem := append(UpdatedCoreMemories, CoreMemories...)
+	if updated {
+		slog.Info("Core Memories have been updated!", "userId", memjob.UserId, "Old Core Memories", Existing_Core_Memories, "New Core Memories", NewMem, "LLM's thinking", MemoryOutput.Reasoning)
+		err := m.CoreMemoryCache.SetCoreMemory(memjob.UserId, NewMem, ctx)
+		if err != nil {
+			slog.Warn("Got this error while trying to set the core memories of the user", "userId", memjob.UserId, "err", err)
+		}
+		slog.Info("Core Memories of the user has been updated", "Core Memories", NewMem)
+	}
+
+	DenseEmbedding, SparseEmbedding, err = m.EmbedClient.GenerateEmbeddings(memories, ctx)
 	if len(memoryIds) != 0 {
 		slog.Info("Memories to delete are: ", "memoryIds", memoryIds)
 		if err := m.Vectordb.DeleteMemories(memoryIds, ctx); err != nil {

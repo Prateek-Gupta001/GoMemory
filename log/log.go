@@ -11,7 +11,6 @@ func SetLogger() {
 	opts := returnOpts()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	slog.SetDefault(logger)
-	slog.Info("The logger has been intialised!")
 }
 
 func returnOpts() *slog.HandlerOptions {

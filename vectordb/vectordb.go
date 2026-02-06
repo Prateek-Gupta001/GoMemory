@@ -8,6 +8,7 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/google/uuid"
 	"github.com/qdrant/go-client/qdrant"
+	"go.opentelemetry.io/otel"
 )
 
 type VectorDB interface {
@@ -71,7 +72,11 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	}, nil
 }
 
+var Tracer = otel.Tracer("Go-Memory")
+
 func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
+	ctx, span := Tracer.Start(ctx, "Vector Search for Memories")
+	defer span.End()
 	res, err := qdb.Client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: "Go_Memory_db",
 		Filter: &qdrant.Filter{
@@ -122,6 +127,8 @@ func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbeddin
 }
 
 func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbedding, SparseEmbeddings []types.SparseEmbedding, memories []string, userId string, ctx context.Context) error {
+	ctx, span := Tracer.Start(ctx, "Inserting New Memories")
+	defer span.End()
 	var Points []*qdrant.PointStruct
 	for idx, sp := range SparseEmbeddings {
 		id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(memories[idx]+userId)).String()
@@ -153,6 +160,8 @@ func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbeddi
 }
 
 func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error) {
+	ctx, span := Tracer.Start(ctx, "Getting All User Memories")
+	defer span.End()
 	res, err := qdb.Client.Scroll(ctx, &qdrant.ScrollPoints{
 		CollectionName: "Go_Memory_db",
 		Filter: &qdrant.Filter{
@@ -187,6 +196,8 @@ func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context
 }
 
 func (qdb *QdrantMemoryDB) DeleteMemories(memoryIds []string, ctx context.Context) error {
+	ctx, span := Tracer.Start(ctx, "Deleting Memories from Qdrant")
+	defer span.End()
 	var qdrantPointIds []*qdrant.PointId
 	for _, memId := range memoryIds {
 		qdrantPointIds = append(qdrantPointIds, qdrant.NewIDUUID(memId))
