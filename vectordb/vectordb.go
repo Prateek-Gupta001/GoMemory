@@ -97,6 +97,10 @@ func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbeddin
 		return nil, err
 	}
 	var Memories []types.Memory
+	if len(res) == 0 {
+		slog.Info("No Memories of the user found", "userId", userId)
+		return nil, nil
+	}
 	for _, r := range res {
 		y := r.Payload
 		slog.Info("memory is", "memory", y["Memory"].GetStringValue())
@@ -108,6 +112,7 @@ func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbeddin
 		Memories = append(Memories, types.Memory{
 			Memory_text: string(y["Memory"].GetStringValue()),
 			Memory_Id:   r.Id.GetUuid(),
+			Type:        types.MemoryTypeGeneral,
 			UserId:      userId,
 		})
 
@@ -173,6 +178,7 @@ func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context
 		Memories = append(Memories, types.Memory{
 			Memory_text: string(y["Memory"].GetStringValue()),
 			Memory_Id:   r.Id.GetUuid(),
+			Type:        types.MemoryTypeGeneral,
 			UserId:      userId,
 		})
 	}

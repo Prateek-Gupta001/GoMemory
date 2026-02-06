@@ -54,16 +54,24 @@ type SparseEmbedding struct {
 	Indices []uint32
 	Values  []float32
 }
+type MemoryType string
+
+const (
+	MemoryTypeCore    MemoryType = "core"
+	MemoryTypeGeneral MemoryType = "general"
+)
 
 type Memory struct {
 	Memory_text string
+	Type        MemoryType
 	Memory_Id   string
 	UserId      string
 }
 
 type MemoryOutput struct {
-	Reasoning string         `json:"step_1 reasoning_scratchpad"`
-	Actions   []MemoryAction `json:"step_2 memory_actions"`
+	Reasoning            string         `json:"step_1 critical_reasoning"`
+	CoreMemoryActions    []MemoryAction `json:"step_2 core_memory_actions"`
+	GeneralMemoryActions []MemoryAction `json:"step_3 general_memory_actions"`
 }
 
 type MemoryAction struct {

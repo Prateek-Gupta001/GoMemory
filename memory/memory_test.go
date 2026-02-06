@@ -9,6 +9,7 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
+	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/nats-io/nats.go"
@@ -58,6 +59,7 @@ func NewtestMemoryAgent() *MemoryAgent {
 		vectordb,
 		llm,
 		embed,
+		&redis.RedisCoreMemoryCache{},
 		js}
 	return agent
 }
