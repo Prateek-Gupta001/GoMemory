@@ -39,14 +39,14 @@ func TestGenerateEmbeddings(t *testing.T) {
 
 	// 2. WARMUP (Do not measure this)
 	// This forces gRPC handshake + ONNX Runtime allocation
-	_, _, _ = client.GenerateEmbeddings([]string{"Warmup request"})
+	_, _, _ = client.GenerateEmbeddings([]string{"Warmup request"}, t.Context())
 	slog.Info("Warmup complete. Starting benchmark...")
 
 	// 3. The Real Test
 	user_query := []string{"Hey there who are you", "I am a high performance agent"}
 
 	start := time.Now()
-	denseEmbed, sparseEmbed, err := client.GenerateEmbeddings(user_query)
+	denseEmbed, sparseEmbed, err := client.GenerateEmbeddings(user_query, t.Context())
 	slog.Info("attributes: ", "len(denseEmbed)", len(denseEmbed), "len(sparseEmbed)", len(sparseEmbed), "user_query", len(user_query))
 	slog.Info("shape stuff: ", "len(denseEmbed)", len(denseEmbed[0].Values), "len(sparseEmbed[0].Indices)", len(sparseEmbed[0].Indices), "len(sparseEmbed[0].Values)", len(sparseEmbed[0].Values))
 	duration := time.Since(start) // Store duration immediately

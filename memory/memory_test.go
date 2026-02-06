@@ -55,11 +55,12 @@ func NewtestMemoryAgent() *MemoryAgent {
 		panic(err)
 	}
 	slog.Info("Finished")
+	RC := redis.NewRedisCoreMemoryCache()
 	agent := &MemoryAgent{
 		vectordb,
 		llm,
 		embed,
-		&redis.RedisCoreMemoryCache{},
+		RC,
 		js}
 	return agent
 }
@@ -96,8 +97,12 @@ func TestInsertMemory(t *testing.T) {
 		UserId: "user_123",
 		Messages: []types.Message{
 			{
-				Role:    types.RoleUser,
-				Content: "I wanna go to Rome and Paris ... I mean I live in Italy but I long for Sicily",
+				Role: types.RoleUser,
+				Content: `I finally did it! I moved to Paris! It's amazing here. 
+			I actually sold that rusty Honda Civic before leaving Italy and just bought a bicycle to get around the city. 
+			
+			Oh, and for the AI Gateway? I'm rewriting the whole thing in Rust now. 
+			Go and GORM were just giving me too many headaches, so I'm done with them for this project.`,
 			},
 		},
 	}

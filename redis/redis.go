@@ -7,6 +7,7 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 )
 
 type CoreMemoryCache interface {
@@ -18,6 +19,8 @@ type CoreMemoryCache interface {
 type RedisCoreMemoryCache struct {
 	RedisClient *redis.Client
 }
+
+var Tracer = otel.Tracer("Go-Memory")
 
 func NewRedisCoreMemoryCache() *RedisCoreMemoryCache {
 	rdb := redis.NewClient(&redis.Options{
@@ -33,6 +36,8 @@ func NewRedisCoreMemoryCache() *RedisCoreMemoryCache {
 
 // Get Core Memories from the Redis Cache. It return nil,nil if the user has currently no core memories.
 func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error) {
+	ctx, span := Tracer.Start(ctx, "Getting Core Memories from Redis")
+	defer span.End()
 	res, err := r.RedisClient.Get(ctx, userId).Bytes()
 	if err != nil {
 		if err == redis.Nil {
@@ -54,6 +59,8 @@ func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context)
 }
 
 func (r *RedisCoreMemoryCache) SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error {
+	ctx, span := Tracer.Start(ctx, "Setting Core Memories in Redis")
+	defer span.End()
 	jsonBytes, err := json.Marshal(CoreMemories)
 	if err != nil {
 		slog.Error("Got this error while trying to set the core memories.. marshalling the json", "error", err, "userId", userId)
@@ -68,6 +75,10 @@ func (r *RedisCoreMemoryCache) SetCoreMemory(userId string, CoreMemories []types
 }
 
 func (r *RedisCoreMemoryCache) DeleteCoreMemory(CoreMemoryId string, ctx context.Context) error {
+	ctx, span := Tracer.Start(ctx, "Deleting Core Memories in Redis")
+	defer span.End()
+	//TODO: Setup a system for deleting core memories ..
+
 	// err := r.RedisClient.del
 
 	return nil

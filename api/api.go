@@ -14,6 +14,8 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/storage"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type MemoryServer struct {
@@ -35,9 +37,10 @@ func (m *MemoryServer) Run() error {
 	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
 	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
 	r.HandleFunc("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
+	r.HandleFunc("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
 	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
 	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
-	slog.Info("AI Memory is at your service Sire!")
+
 	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
 		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
 		return err
@@ -79,6 +82,9 @@ func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIE
 	writeJSON(w, http.StatusOK, "Server is healthy!")
 	return &APIError{}
 }
+
+var Tracer = otel.Tracer("Go-Memory")
+
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")
 	req := &types.InsertMemoryRequest{}
@@ -116,11 +122,15 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 }
 
 func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIError {
+
 	var req = &types.MemoryRetrievalRequest{}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer r.Body.Close()
+	ctx, span := Tracer.Start(ctx, "Memory Retrieval")
+	defer span.End()
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		span.RecordError(err)
 		slog.Info("Got malformed JSON here in the Get Memory request", "error", err)
 		return &APIError{
 			Message: "Malformed JSON here in the Get Memory request",
@@ -128,6 +138,10 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			Status:  http.StatusBadRequest,
 		}
 	}
+	span.SetAttributes(
+		attribute.String("userId", req.UserId),
+		attribute.String("reqId", req.ReqId),
+	)
 	if req.Threshold == 0 {
 		slog.Info("threshold wasn't provided by default .. using the default value")
 		req.Threshold = 0.65
@@ -135,7 +149,9 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	reqId := uuid.NewString()
 	req.ReqId = reqId
 	if req.Messages != nil {
+		span.SetAttributes(attribute.String("type", "messages"))
 		if len(req.Messages) == 0 {
+			span.RecordError(fmt.Errorf("No messages were provided"))
 			return &APIError{
 				Status:  http.StatusBadRequest,
 				Message: "Need atleast one message",
@@ -148,6 +164,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, ctx)
 		if err != nil {
 			slog.Error("Got this error while trying to get memories", "error", err)
+			span.RecordError(err)
 			return &APIError{
 				Message: "Memory Retrieval Failed!",
 				Error:   err,
@@ -158,10 +175,12 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		return nil
 	}
 	if req.UserQuery != "" {
+		span.SetAttributes(attribute.String("type", "userQuery"))
 		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)
 		userQuery := req.UserQuery
 		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, req.Threshold, ctx)
 		if err != nil {
+			span.RecordError(err)
 			slog.Error("Got this error while trying to get memories", "error", err)
 			return &APIError{
 				Message: "Memory Retrieval Failed!",
@@ -189,8 +208,13 @@ func GetId(r *http.Request) (string, error) {
 }
 
 func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request) *APIError {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, span := Tracer.Start(ctx, "GetAllUserMemories")
+	defer span.End()
+	defer cancel()
 	userId, err := GetId(r)
 	if err != nil {
+		span.RecordError(err)
 		slog.Error("Got this error while getting Id for GetAllUserMemories", "error", err)
 		return &APIError{
 			Error:   err,
@@ -198,11 +222,11 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 			Status:  http.StatusBadRequest,
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
-	defer cancel()
+	span.SetAttributes(attribute.String("userId", userId))
 
 	mem, err := m.memory.GetAllUserMemories(userId, ctx)
 	if err != nil {
+		span.RecordError(err)
 		slog.Error("Got this error while trying to get all memories of the user (in the memory agent)", "error", err, "userId", userId)
 		return &APIError{
 			Message: "Failed to get all user memories",
@@ -212,19 +236,53 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, http.StatusOK, mem)
 	return nil
-	// select{
-	// case <- ctx.Done():
-	// 	slog.Info("Memory retrieval request timed out!", "userId", req.UserId)
-	// 	return &APIError{
-	// 		Message: "Retrieval Timed out",
-	// 		Status: http.StatusGatewayTimeout,
-	// 		Error: fmt.Errorf("Too Much Time taken!"),
-	// 	}
+}
 
-	// }
+func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *APIError {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, span := Tracer.Start(ctx, "GetCoreMemories")
+	defer span.End()
+	defer cancel()
+	userId, err := GetId(r)
+	if err != nil {
+		slog.Error("Got this error while getting Id for GetCoreMemories", "error", err)
+		span.RecordError(err)
+		return &APIError{
+			Error:   err,
+			Message: "Bad Request",
+			Status:  http.StatusBadRequest,
+		}
+	}
+	span.SetAttributes(attribute.String("userId", userId))
+
+	mem, err := m.memory.GetCoreMemories(userId, ctx)
+	if err != nil {
+		slog.Info("Got this error while trying to get the core memories of the user", "userId", userId)
+		span.RecordError(err)
+		return &APIError{
+			Status:  http.StatusInternalServerError,
+			Message: "Oops something went wrong! Please try again later!",
+			Error:   err,
+		}
+	}
+	if mem == nil {
+		return &APIError{
+			Status:  http.StatusOK,
+			Message: "User has no core memories!",
+			Error:   err,
+		}
+
+	}
+	writeJSON(w, http.StatusOK, mem)
+	return nil
 }
 
 func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	//TODO: Update this endpoint to take in core memory Ids as well!
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, span := Tracer.Start(ctx, "DeleteUserMemory")
+	defer span.End()
+	defer cancel()
 	req := &types.DeleteMemoryRequest{}
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -234,9 +292,10 @@ func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) 
 			Status:  http.StatusBadRequest,
 		}
 	}
-
-	err := m.memory.DeleteMemory(req.MemoryIds, r.Context())
+	span.SetAttributes(attribute.String("userId", req.UserId))
+	err := m.memory.DeleteMemory(req.MemoryIds, ctx)
 	if err != nil {
+		span.RecordError(err)
 		slog.Error("Got this error while trying to delete memory", "error", err, "userId", req.UserId)
 		return &APIError{
 			Message: "Deletion failed",

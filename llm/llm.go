@@ -14,6 +14,7 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/joho/godotenv"
+	"go.opentelemetry.io/otel"
 
 	// "github.com/google/uuid"
 	"google.golang.org/api/googleapi"
@@ -55,8 +56,11 @@ type Existing_Memory struct {
 	MemoryId    string           `json:"id"`
 }
 
-func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories []types.Memory, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
+var Tracer = otel.Tracer("Go-Memory")
 
+func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories []types.Memory, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
+	ctx, span := Tracer.Start(ctx, "Generating MemoryOutput from LLM")
+	defer span.End()
 	var allUserText string
 	var prompt string
 	var Existing_Memories_old []Existing_Memory
@@ -65,11 +69,12 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 	for _, msg := range messages {
 		//TODO: Think about whether you actually want the allUserText or just the latest turn .. since the memories for the previous turns would
 		//TODO: already have been stored by won't show up in existing memories .. or the dev should only do this .. after a fix no. of turns
-		//TODO: something like that .. think about that in the docs.
-		if msg.Role == types.RoleUser {
-			sb.WriteString(msg.Content)
-			sb.WriteString("\n")
-		}
+		//TODO: something like that .. think about that in the docs. How should the developer experience in that be..
+		// if msg.Role == types.RoleUser {
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+		//TODO: Write now .. all the message content goes .. change this .. or keep it turn wise or something like that.
+		// }
 	}
 	allUserText = sb.String()
 	type DoubleMap struct {
@@ -84,6 +89,7 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 	}
 
 	for idx, m := range coreMemories {
+		//TODO: Add a check to ensure that these are actually core memories!
 		dMap.UUIDtoInt[m.Memory_Id] = strconv.Itoa(idx)
 		dMap.IntTOUUID[strconv.Itoa(idx)] = m.Memory_Id
 		Existing_Memories_core = append(Existing_Memories_core, Existing_Memory{
@@ -95,7 +101,7 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 	for idx, m := range oldMemories {
 		displacedId := idx + len(coreMemories)
 		dMap.UUIDtoInt[m.Memory_Id] = strconv.Itoa(displacedId)
-		dMap.IntTOUUID[strconv.Itoa(len(coreMemories))] = m.Memory_Id
+		dMap.IntTOUUID[strconv.Itoa(displacedId)] = m.Memory_Id
 		Existing_Memories_old = append(Existing_Memories_old, Existing_Memory{
 			Memory_text: m.Memory_text,
 			Type:        m.Type,
@@ -116,7 +122,6 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 	}
 
 	slog.Info("Here are the thing being passed into the prompt", "Existing Old Memories", string(OldMemorybytes), "Existing Core Memories", string(coreMemoryBytes), "UserInput", allUserText)
-	//TODO: Simiplify the Exisitng Memories to include simple integer IDs and map them back to their normal unique uuids
 
 	prompt = "<EXISTING_CORE_MEMORIES> \n" + string(coreMemoryBytes) + "\n </EXISTING_CORE_MEMORIES> \n" + "<EXISTING_OLD_MEMORIES> \n" + string(OldMemorybytes) + "\n </EXISTING_OLD_MEMORIES> \n" + "<USER_INPUT> \n" + allUserText + "\n </USER_INPUT>"
 	// Action Schema (Same as before)
@@ -173,7 +178,6 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 		},
 		Required: []string{"step_1 critical_reasoning", "step_2 core_memory_actions", "step_3 general_memory_actions"},
 	}
-	//TODO: Think of whether we should just pass allUserText type thing in ExpandQuery function as well ..
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(`### ROLE
 You are the **Memory Archivist**. You are a Ruthless Database Administrator. Your goal is to maintain a pristine, high-signal database.
@@ -295,7 +299,7 @@ In your "step_1_critical_reasoning" field:
 	}
 	for idx, _ := range memoryOutput.CoreMemoryActions {
 		if memoryOutput.CoreMemoryActions[idx].ActionType == "DELETE" {
-			slog.Info("Have Delete")
+			slog.Info("Have Core Delete")
 			if memoryOutput.CoreMemoryActions[idx].TargetMemoryID != nil {
 				slog.Info("Have id", "id", *memoryOutput.CoreMemoryActions[idx].TargetMemoryID)
 				id := *memoryOutput.CoreMemoryActions[idx].TargetMemoryID
@@ -307,7 +311,7 @@ In your "step_1_critical_reasoning" field:
 	}
 	for idx, _ := range memoryOutput.GeneralMemoryActions {
 		if memoryOutput.GeneralMemoryActions[idx].ActionType == "DELETE" {
-			slog.Info("Have Delete")
+			slog.Info("Have General Delete")
 			if memoryOutput.GeneralMemoryActions[idx].TargetMemoryID != nil {
 				slog.Info("Have id", "id", *memoryOutput.GeneralMemoryActions[idx].TargetMemoryID)
 				id := *memoryOutput.GeneralMemoryActions[idx].TargetMemoryID
@@ -317,10 +321,13 @@ In your "step_1_critical_reasoning" field:
 			}
 		}
 	}
+
 	return memoryOutput, nil
 }
 
 func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context) string {
+	ctx, span := Tracer.Start(ctx, "Getting Expanded Query from the LLM")
+	defer span.End()
 	history := GetGeminiHistory(messages)
 	chat, _ := llm.GeminiClient.Chats.Create(ctx, "gemini-3-flash-preview", nil, history)
 	expandQueryPrompt := ` 
@@ -390,8 +397,12 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 }
 
 func RetryAbleError(err error) bool {
+	slog.Info("Retryable error was called!")
 	if gErr, ok := err.(*googleapi.Error); ok {
 		slog.Info("Retryable Error", "errcode", gErr.Code)
+		if gErr.Code == 503 {
+			return true
+		}
 		if gErr.Code >= 500 {
 			return true
 		}

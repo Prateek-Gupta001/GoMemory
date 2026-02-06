@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -16,7 +17,37 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+func PrintBanner() {
+	// ANSI Color Codes for that "Futuristic Terminal" look
+	const (
+		Reset   = "\033[0m"
+		Cyan    = "\033[36m"
+		Green   = "\033[32m"
+		Magenta = "\033[35m"
+		Bold    = "\033[1m"
+	)
+
+	banner := `
+   ______      __  ___                          
+  / ____/___  /  |/  /___  ____ ___  ____  _____ __  __
+ / / __/ __ \/ /|_/ / __ \/ __ ` + "`" + `__ \/ __ \/ ___/ / / /
+/ /_/ / /_/ / /  / /  __/ / / / / / /_/ / /   / /_/ / 
+\____/\____/_/  /_/\___/_/ /_/ /_/\____/_/    \__, /  
+                                             /____/   
+`
+	fmt.Println(Cyan + Bold + banner + Reset)
+	fmt.Printf("%s:: GoMemory Cortex v1.0 ::%s %sThe future of memory for AI Agents is here%s\n\n", Magenta, Reset, Bold, Reset)
+
+	// The "System Check" sequence
+	fmt.Println(Green + " ✓ " + Reset + "Gatekeeper Protocol........ " + Green + "ONLINE" + Reset)
+	fmt.Println(Green + " ✓ " + Reset + "Predatory Pruning.......... " + Green + "ACTIVE" + Reset)
+	fmt.Println(Green + " ✓ " + Reset + "Vector Uplink.............. " + Green + "ESTABLISHED" + Reset)
+	fmt.Println(Green + " ✓ " + Reset + "Recall Systems............. " + Green + "READY" + Reset)
+	fmt.Println("") // Spacer
+}
+
 func main() {
+	PrintBanner()
 	logger.SetLogger()
 	err := godotenv.Load()
 	if err != nil {
@@ -43,13 +74,13 @@ func main() {
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
 		slog.Error("can't connect to NATS", "error", err)
+		panic(err)
 	}
 
 	js, err := nc.JetStream()
 	if err != nil {
 		panic(err)
 	}
-	slog.Info("NATS JetStream is up!")
 	_, err = js.AddStream(&nats.StreamConfig{
 		Name:     "MEMORY_SYSTEM",
 		Subjects: []string{"memory_work"},
@@ -66,7 +97,6 @@ func main() {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}
 	server := api.NewMemoryServer(":9000", store, memory)
-	slog.Info("Server is running on port 9000!")
 	if err := server.Run(); err != nil {
 		panic(err)
 	}
