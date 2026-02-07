@@ -56,7 +56,7 @@ type Existing_Memory struct {
 	MemoryId    string           `json:"id"`
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories []types.Memory, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
 	ctx, span := Tracer.Start(ctx, "Generating MemoryOutput from LLM")
@@ -70,11 +70,19 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories 
 		//TODO: Think about whether you actually want the allUserText or just the latest turn .. since the memories for the previous turns would
 		//TODO: already have been stored by won't show up in existing memories .. or the dev should only do this .. after a fix no. of turns
 		//TODO: something like that .. think about that in the docs. How should the developer experience in that be..
-		// if msg.Role == types.RoleUser {
+		switch msg.Role {
+		case types.RoleUser:
+			sb.WriteString("User: ")
+		case types.RoleAssistant:
+			sb.WriteString("Assistant: ")
+		case types.RoleSystem:
+			sb.WriteString("System: ")
+		default:
+			continue
+		}
 		sb.WriteString(msg.Content)
 		sb.WriteString("\n")
 		//TODO: Write now .. all the message content goes .. change this .. or keep it turn wise or something like that.
-		// }
 	}
 	allUserText = sb.String()
 	type DoubleMap struct {

@@ -50,7 +50,7 @@ func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.E
 	return m, nil
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 func (m *MemoryAgent) MemoryWorker(id int) {
 	m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
@@ -94,7 +94,7 @@ func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]typ
 }
 
 func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
-	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{text}, ctx)
+	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + text}, ctx)
 	//TODO: Make these two independent requests concurrent using goroutines and waitgroups, errgroups. Here AND in GetAllUserMemories.
 	if err != nil {
 		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)

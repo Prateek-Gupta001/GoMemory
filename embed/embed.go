@@ -56,7 +56,7 @@ func (e *EmbeddingClient) Close() error {
 	return nil
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 // GenerateEmbeddings sends a gRPC request to generate both dense and sparse embeddings
 // for a list of queries

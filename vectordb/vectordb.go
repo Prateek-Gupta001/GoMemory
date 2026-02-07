@@ -72,7 +72,7 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 	}, nil
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
 	ctx, span := Tracer.Start(ctx, "Vector Search for Memories")

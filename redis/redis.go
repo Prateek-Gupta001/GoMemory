@@ -20,7 +20,7 @@ type RedisCoreMemoryCache struct {
 	RedisClient *redis.Client
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 func NewRedisCoreMemoryCache() *RedisCoreMemoryCache {
 	rdb := redis.NewClient(&redis.Options{
