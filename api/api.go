@@ -83,7 +83,7 @@ func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIE
 	return &APIError{}
 }
 
-var Tracer = otel.Tracer("Go-Memory")
+var Tracer = otel.Tracer("Go_Memory")
 
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")

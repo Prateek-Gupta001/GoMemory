@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
+	"github.com/Prateek-Gupta001/GoMemory/telemetry"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
@@ -89,7 +91,17 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
+	shutdown, err := telemetry.InitTracer("Go_Memory")
+	if err != nil {
+		slog.Error("failed to init tracer", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Telemetry has been intialised!")
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			slog.Error("failed to shutdown tracer", "error", err)
+		}
+	}()
 	defer nc.Close()
 	RC := redis.NewRedisCoreMemoryCache()
 	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, RC, 5000, 2)
