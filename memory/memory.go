@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
 	"github.com/Prateek-Gupta001/GoMemory/redis"
@@ -25,37 +27,58 @@ type Memory interface {
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
+	StopMemoryAgent()
 	// in the future: delete user's memories and delete memory by Id...
 }
 
 type MemoryAgent struct {
 	Vectordb        vectordb.VectorDB
+	MemoryAgentCtx  context.Context
 	LLM             llm.LLM
 	EmbedClient     embed.Embed
 	CoreMemoryCache redis.CoreMemoryCache
 	JSClient        nats.JetStreamContext
+	WG              *sync.WaitGroup
+	ActiveJobs      *sync.WaitGroup
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.CoreMemoryCache, queueLen int, numWorker int) (*MemoryAgent, error) {
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.CoreMemoryCache, queueLen int, numWorker int, MemoryAgentCtx context.Context) (*MemoryAgent, error) {
+	wg := &sync.WaitGroup{}
 	m := &MemoryAgent{
 		Vectordb:        vectordb,
 		LLM:             llm,
 		EmbedClient:     embedClient,
 		CoreMemoryCache: RC,
 		JSClient:        nc,
+		MemoryAgentCtx:  MemoryAgentCtx,
+		WG:              wg,
+		ActiveJobs:      &sync.WaitGroup{},
 	}
 	for i := 0; i < numWorker; i++ {
-		go m.MemoryWorker(i)
+		m.WG.Add(1)
+		go func() {
+			m.MemoryWorker(i, m.WG)
+		}()
 	}
 	return m, nil
 }
 
 var Tracer = otel.Tracer("Go_Memory")
 
-func (m *MemoryAgent) MemoryWorker(id int) {
-	m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
+func (m *MemoryAgent) StopMemoryAgent() {
+	slog.Info("Waiting for all the memory agent jobs to finish")
+	m.WG.Wait()
+	m.ActiveJobs.Wait()
+	slog.Info("All exisiting memory jobs have finished! Server is ready to be shutdown gracefully!")
+}
+
+func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	subs, err := m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
 		fmt.Printf("----------------------------------- Worker got a memory Job: %s\n ----------------------------------- \n", string(msg.Data))
 		memJob := &types.MemoryInsertionJob{}
+		m.ActiveJobs.Add(1)
+		defer m.ActiveJobs.Done()
 		if err := json.Unmarshal(msg.Data, memJob); err != nil {
 			slog.Error("error while unmarshalling NATS-jetstream data", "error", err)
 			msg.Term()
@@ -70,6 +93,17 @@ func (m *MemoryAgent) MemoryWorker(id int) {
 		}
 		msg.Ack()
 	})
+	if err != nil {
+		slog.Error("Got this error while trying to subscribe to the NATJetstream queue", "error", err)
+		return
+	}
+	select {
+	case <-m.MemoryAgentCtx.Done():
+		slog.Info("Graceful shutdown of memory workers is in progress!")
+		if err := subs.Drain(); err != nil {
+			slog.Warn("Got this error while draining the memory queue")
+		}
+	}
 }
 
 func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
@@ -254,6 +288,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		}
 	}
 	//update the entry in the database.
+	slog.Info("Memory Insertion for the user was successful!", "userId", memjob.UserId)
 	return nil
 }
 

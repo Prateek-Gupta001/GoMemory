@@ -75,6 +75,7 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             
             for q in queries:
                 if q.startswith(prefix):
+                    print("We had query appending! prepending the bge_instruction")
                     # 1. Trim the prefix
                     trimmed_q = q[len(prefix):]
                     # 2. Prepend BGE instruction (Only for dense)
