@@ -160,7 +160,7 @@ func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbeddi
 }
 
 func (qdb *QdrantMemoryDB) GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error) {
-	ctx, span := Tracer.Start(ctx, "Getting All User Memories")
+	ctx, span := Tracer.Start(ctx, "Getting All User Memories (Qdrant)")
 	defer span.End()
 	res, err := qdb.Client.Scroll(ctx, &qdrant.ScrollPoints{
 		CollectionName: "Go_Memory_db",

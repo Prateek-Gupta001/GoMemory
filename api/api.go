@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+
 	"regexp"
 	"strings"
 	"time"
@@ -32,7 +33,42 @@ func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Mem
 	}
 }
 
-func (m *MemoryServer) Run() error {
+func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err error) {
+
+	defer stop()
+	srv := &http.Server{
+		Addr:         m.listenAddr,
+		ReadTimeout:  time.Second * 10,
+		WriteTimeout: 10 * time.Second,
+		Handler:      m.newHTTPHandler(),
+	}
+	srvErr := make(chan error, 1)
+	go func() {
+		slog.Info("Running HTTP server...")
+		srvErr <- srv.ListenAndServe()
+	}()
+
+	// Wait for interruption.
+	select {
+	case err = <-srvErr:
+		// Error when starting HTTP server.
+		return err
+	case <-ctx.Done():
+		// Wait for first CTRL+C.
+		// Stop receiving signal notifications as soon as possible.
+		stop()
+	}
+
+	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
+	timeCtx, _ := context.WithTimeout(context.Background(), time.Second*50)
+	err = srv.Shutdown(timeCtx)
+	slog.Info("Stopping all currently ongoing memory jobs.")
+	m.memory.StopMemoryAgent()
+	slog.Info("Graceful shutdown in order!")
+	return err
+}
+
+func (m *MemoryServer) newHTTPHandler() http.Handler {
 	r := http.NewServeMux()
 	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
 	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
@@ -40,12 +76,7 @@ func (m *MemoryServer) Run() error {
 	r.HandleFunc("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
 	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
 	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
-
-	if err := http.ListenAndServe(m.listenAddr, r); err != nil {
-		slog.Error("Got this error while trying to listen and serve the http server", "error", err)
-		return err
-	}
-	return nil
+	return r
 }
 
 type APIError struct {
@@ -113,7 +144,7 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 			Status: http.StatusInternalServerError,
 		}
 	}
-	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well .....
+	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well ..... //TODO: Implement the storage stuff.
 	writeJSON(w, http.StatusOK, MemoryInsertionResponse{
 		ReqId: reqId,
 		Msg:   "Memory Insertion Job has been queued for insertion!",
@@ -160,6 +191,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		}
 		slog.Info("Messages type request came in here!", "reqId", reqId)
 		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
+		//TODO: Add concurrent chunking and memory retrieval in v2 of Go Memory.
 		query := ConstructContextualQuery(req.Messages, 500)
 		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, ctx)
 		if err != nil {
