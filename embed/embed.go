@@ -8,13 +8,15 @@ import (
 
 	pb "github.com/Prateek-Gupta001/GoMemory/proto/embedding"
 	"github.com/Prateek-Gupta001/GoMemory/types"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Embed interface defines methods for generating embeddings
 type Embed interface {
-	GenerateEmbeddings(user_query []string) ([]types.DenseEmbedding, []types.SparseEmbedding, error)
+	GenerateEmbeddings(user_query []string, ctx context.Context) ([]types.DenseEmbedding, []types.SparseEmbedding, error)
 	GenerateDenseEmbedding(query string) (types.DenseEmbedding, error)
 }
 
@@ -54,10 +56,15 @@ func (e *EmbeddingClient) Close() error {
 	return nil
 }
 
+var Tracer = otel.Tracer("Go_Memory")
+
 // GenerateEmbeddings sends a gRPC request to generate both dense and sparse embeddings
 // for a list of queries
-func (e *EmbeddingClient) GenerateEmbeddings(user_query []string) ([]types.DenseEmbedding, []types.SparseEmbedding, error) {
+func (e *EmbeddingClient) GenerateEmbeddings(user_query []string, ctx context.Context) ([]types.DenseEmbedding, []types.SparseEmbedding, error) {
 	// Validate input
+	ctx, span := Tracer.Start(ctx, "Generate Embeddings")
+	defer span.End()
+	span.SetAttributes(attribute.Float64("Num Queries", float64(len(user_query))))
 	slog.Info("Got Embedding Generation Request!")
 	if len(user_query) == 0 {
 		return nil, nil, fmt.Errorf("user_query cannot be empty")

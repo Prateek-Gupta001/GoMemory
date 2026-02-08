@@ -14,6 +14,7 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/joho/godotenv"
+	"go.opentelemetry.io/otel"
 
 	// "github.com/google/uuid"
 	"google.golang.org/api/googleapi"
@@ -21,8 +22,8 @@ import (
 )
 
 type LLM interface {
-	GenerateMemoryText([]types.Message, []types.Memory, context.Context) (*types.MemoryOutput, error)
-	ExpandQuery([]types.Message, context.Context) (string, error)
+	GenerateMemoryText(messages []types.Message, coreMemories []types.Memory, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error)
+	ExpandQuery([]types.Message, context.Context) string
 }
 
 type GeminiLLM struct {
@@ -50,21 +51,38 @@ func NewGeminiLLM() (*GeminiLLM, error) {
 }
 
 type Existing_Memory struct {
-	Memory_text string `json:"text"`
-	MemoryId    string `json:"id"`
+	Memory_text string           `json:"text"`
+	Type        types.MemoryType `json:"type"`
+	MemoryId    string           `json:"id"`
 }
 
-func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
+var Tracer = otel.Tracer("Go_Memory")
 
+func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, coreMemories []types.Memory, oldMemories []types.Memory, ctx context.Context) (*types.MemoryOutput, error) {
+	ctx, span := Tracer.Start(ctx, "Generating MemoryOutput from LLM")
+	defer span.End()
 	var allUserText string
 	var prompt string
-	var Existing_Memories []Existing_Memory
+	var Existing_Memories_old []Existing_Memory
+	var Existing_Memories_core []Existing_Memory
 	var sb strings.Builder
 	for _, msg := range messages {
-		if msg.Role == types.RoleUser {
-			sb.WriteString(msg.Content)
-			sb.WriteString("\n")
+		//TODO: Think about whether you actually want the allUserText or just the latest turn .. since the memories for the previous turns would
+		//TODO: already have been stored by won't show up in existing memories .. or the dev should only do this .. after a fix no. of turns
+		//TODO: something like that .. think about that in the docs. How should the developer experience in that be..
+		switch msg.Role {
+		case types.RoleUser:
+			sb.WriteString("User: ")
+		case types.RoleAssistant:
+			sb.WriteString("Assistant: ")
+		case types.RoleSystem:
+			sb.WriteString("System: ")
+		default:
+			continue
 		}
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n")
+		//TODO: Write now .. all the message content goes .. change this .. or keep it turn wise or something like that.
 	}
 	allUserText = sb.String()
 	type DoubleMap struct {
@@ -78,117 +96,173 @@ func (llm *GeminiLLM) GenerateMemoryText(messages []types.Message, oldMemories [
 		IntTOUUID: UIntTOUUID,
 	}
 
-	for idx, m := range oldMemories {
+	for idx, m := range coreMemories {
+		//TODO: Add a check to ensure that these are actually core memories!
 		dMap.UUIDtoInt[m.Memory_Id] = strconv.Itoa(idx)
 		dMap.IntTOUUID[strconv.Itoa(idx)] = m.Memory_Id
-		Existing_Memories = append(Existing_Memories, Existing_Memory{
+		Existing_Memories_core = append(Existing_Memories_core, Existing_Memory{
 			Memory_text: m.Memory_text,
+			Type:        m.Type,
 			MemoryId:    dMap.UUIDtoInt[m.Memory_Id],
 		})
-
+	}
+	for idx, m := range oldMemories {
+		displacedId := idx + len(coreMemories)
+		dMap.UUIDtoInt[m.Memory_Id] = strconv.Itoa(displacedId)
+		dMap.IntTOUUID[strconv.Itoa(displacedId)] = m.Memory_Id
+		Existing_Memories_old = append(Existing_Memories_old, Existing_Memory{
+			Memory_text: m.Memory_text,
+			Type:        m.Type,
+			MemoryId:    dMap.UUIDtoInt[m.Memory_Id],
+		})
 	}
 
 	slog.Info("Here is the mapping here", "map", dMap)
-	bytes, err := json.MarshalIndent(Existing_Memories, "", " ")
+	OldMemorybytes, err := json.MarshalIndent(Existing_Memories_old, "", " ")
 	if err != nil {
 		slog.Error("Got this error while doing json.MarshalIndent.. and while generating memory text", "err", err)
 		return nil, err
 	}
-	slog.Info("Here are the thing being passed into the prompt", "Exisisting Memories", string(bytes), "UserInput", allUserText)
-	//TODO: Simiplify the Exisitng Memories to include simple integer IDs and map them back to their normal unique uuids
+	coreMemoryBytes, err := json.MarshalIndent(Existing_Memories_core, "", " ")
+	if err != nil {
+		slog.Error("Got this error while doing json.MarshalIndent.. and while generating memory text", "err", err)
+		return nil, err
+	}
 
-	prompt = "<EXISTING_MEMORIES> \n" + string(bytes) + "\n </EXISTING_MEMORIES> \n" + "<USER_INPUT> \n" + allUserText + "\n </USER_INPUT>"
+	slog.Info("Here are the thing being passed into the prompt", "Existing Old Memories", string(OldMemorybytes), "Existing Core Memories", string(coreMemoryBytes), "UserInput", allUserText)
+
+	prompt = "<EXISTING_CORE_MEMORIES> \n" + string(coreMemoryBytes) + "\n </EXISTING_CORE_MEMORIES> \n" + "<EXISTING_OLD_MEMORIES> \n" + string(OldMemorybytes) + "\n </EXISTING_OLD_MEMORIES> \n" + "<USER_INPUT> \n" + allUserText + "\n </USER_INPUT>"
+	// Action Schema (Same as before)
 	ptr := true
+
+	memoryActionItemSchema := &genai.Schema{
+		Type:  genai.TypeObject,
+		Title: "SingleMemoryAction",
+		Properties: map[string]*genai.Schema{
+			"action_type": {
+				Type: genai.TypeString,
+				Enum: []string{"INSERT", "DELETE"},
+			},
+			"payload": {
+				Type:     genai.TypeString,
+				Nullable: &ptr,
+			},
+			"target_memory_id": {
+				Type:        genai.TypeString,
+				Nullable:    &ptr,
+				Description: "The Integer ID of the memory to delete.",
+			},
+		},
+		Required: []string{"action_type"},
+	}
+
 	responseSchema := &genai.Schema{
 		Type:  genai.TypeObject,
 		Title: "MemoryArchivistOutput",
 		Properties: map[string]*genai.Schema{
-			"step_1 reasoning_scratchpad": {
+			"step_1 critical_reasoning": {
 				Type:  genai.TypeString,
-				Title: "Reasoning Step-by-Step",
-				Description: `CRITICAL: rigorous step-by-step analysis.
-			1. Identify new high-fidelity facts.
-			2. Search for conflicts in existing memory IDs.
-			3. Decide on DELETE/INSERT.
-			Do not output JSON until this analysis is complete.
-			First output reasoning and thinking and then generate memory_actions`,
+				Title: "The Analyst Workbench",
+				Description: `CRITICAL: You must output your thought process here BEFORE generating actions.
+            Follow this EXACT structure in your text:
+            1. [INPUT ANALYSIS] List distinct facts found in User Input. Think about what new facts have been mentioned by the user.
+            2. [CORE SCAN] Check 'Existing_Core_Memories' for conflicts.
+               - IF Conflict Found: Write "CONFLICT: Core ID [X] says '...' vs New Input '...' -> Must DELETE [X] and INSERT new."
+            3. [GENERAL SCAN] Check 'Existing_General_Memories' for conflicts.
+               - IF Conflict Found: Write "CONFLICT: Gen ID [Y] says '...' vs New Input '...' -> Must DELETE [Y] and INSERT new."
+            4. [DUPLICATION CHECK] verify that the new fact doesn't already exist perfectly.
+            `,
 			},
-			"step_2 memory_actions": {
+			"step_2 core_memory_actions": {
 				Type:  genai.TypeArray,
-				Title: "Final Memory Operations",
-				Items: &genai.Schema{
-					Type:  genai.TypeObject,
-					Title: "SingleMemoryAction",
-					Properties: map[string]*genai.Schema{
-						"action_type": {
-							Type:        genai.TypeString,
-							Title:       "Operation Type",
-							Enum:        []string{"INSERT", "DELETE"},
-							Description: "The operation to perform.",
-						},
-						"payload": {
-							Type:        genai.TypeString,
-							Title:       "Memory Content",
-							Description: "Required for INSERT. The high-fidelity, context-rich memory text. Leave empty/null if action_type is DELETE.",
-							Nullable:    &ptr, // Explicitly allow null
-						},
-						"target_memory_id": {
-							Type:        genai.TypeString,
-							Title:       "Target ID",
-							Description: "Required for DELETE. The exact ID of the existing memory to remove. Leave empty/null if action_type is INSERT.",
-							Nullable:    &ptr, // Explicitly allow null
-						},
-					},
-					Required: []string{"action_type"},
-				},
+				Title: "Core Actions",
+				Items: memoryActionItemSchema,
+			},
+			"step_3 general_memory_actions": {
+				Type:  genai.TypeArray,
+				Title: "General Actions",
+				Items: memoryActionItemSchema,
 			},
 		},
-		// CRITICAL: The order in this slice dictates the generation order
-		Required: []string{"step_1 reasoning_scratchpad", "step_2 memory_actions"},
+		Required: []string{"step_1 critical_reasoning", "step_2 core_memory_actions", "step_3 general_memory_actions"},
 	}
-	//TODO: Think of whether we should just pass allUserText type thing in ExpandQuery function as well ..
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(`### ROLE
-You are the **Memory Archivist**, an advanced neural interface responsible for maintaining a high-fidelity, long-term database of user facts. 
+You are the **Memory Archivist**. You are a Ruthless Database Administrator. Your goal is to maintain a pristine, high-signal database.
 
-### OBJECTIVE
-Your goal is to parse new User Input, compare it against a provided list of Existing Memories, and output a list of JSON actions (*INSERT* or *DELETE*) to update the database. 
+### THE "GATEKEEPER" PROTOCOL (Spam Filter)
+**90% of user conversation is NOT memory-worthy. Do not archive temporary context.**
+You must aggressively filter out noise. Only store permanent truths.
 
-### CRITICAL STANDARDS FOR MEMORY CREATION
-1.  **High Fidelity Only:** Never store vague statements. 
-    * *BAD:* "User likes coding."
-    * *GOOD:* "User is a Golang backend engineer utilizing Qdrant for vector search."
-2.  **Context Preservation:** Memories must be standalone facts. If the user says "I hate it," and "it" refers to "Java," store: "User has a strong distaste for the Java programming language," not "User hates it."
-3.  **Selectivity:** Do not archive trivial chitchat (e.g., "Hello," "How are you?"). Only archive permanent facts, preferences, goals, or biographical data.
+* **TRASH (Do Not Save):**
+    * *Chitchat:* "Hello", "How are you?", "Thanks".
+    * *Temporary States:* "I'm hungry", "I'm going to sleep", "I'm driving right now".
+    * *Task Context:* "Here is my code, fix it", "Write a poem about dogs". (The user asking for code is not a memory; the user *liking* Python is).
+    * *Vague Statements:* "That's cool", "I like that".
 
-### LOGIC FLOW (The Decision Tree)
-For every distinct fact found in the User Input, perform this check against *Existing_Memories*:
+* **TREASURE (Save Immediately):**
+    * *Biographical:* "I am 25", "I live in Berlin".
+    * *Preferences:* "I prefer short answers", "I hate Java".
+    * *Projects:* "I am building a RAG app with Qdrant".
 
-**Case 1: No Conflict, New Information**
-* *Condition:* The fact is new and does not overlap with any existing memory ID.
-* *Action:* *INSERT* the new rich text.
+### THE "PREDATORY PRUNING" PROTOCOL
+**Passive recording is insufficient. You must ACTIVELY HUNT for obsolete data.**
+Your default mode is "Search and Destroy." Treat every new piece of information as a weapon to eliminate outdated facts.
 
-**Case 2: Direct Contradiction (Correction)**
-* *Condition:* New input contradicts an existing memory (e.g., Old: "User lives in Ohio", New: "I moved to Paris").
-* *Action:* *DELETE* the old *memory_id* AND *INSERT* the new fact.
+**EXECUTION RULES:**
+1.  **Assume Conflict:** For every single fact you extract, *assume* a contradiction already exists in the database. Your job is to find it.
+2.  **Stalk the Target:** If a new fact updates a user's status (e.g., "Student" -> "Employed"), you MUST issue a DELETE command for the old ID.
+3.  **Zero Tolerance:** Allowing two conflicting versions of the truth to coexist is a CRITICAL SYSTEM FAILURE.
 
-**Case 3: Consolidation (Refinement)**
-* *Condition:* New input adds specific detail to a vague existing memory (e.g., Old: "User owns a dog", New: "My dog is a Golden Retriever named Max").
-* *Action:* *DELETE* the old *memory_id* AND *INSERT* the merged, high-fidelity memory ("User owns a Golden Retriever named Max").
+### MEMORY CLASSIFICATION
+**TIER 1: CORE MEMORIES (Identity & Existence)**
+* **Scope:** Name, Age, Gender, Location, Profession, Global AI Instructions.
+* **Action:** If these change, the old memory MUST be deleted immediately.
 
-### INPUT FORMAT
-You will receive:
-1.  *Existing_Memories*: A list of objects containing { "id": "...", "text": "..." }.
-2.  *User_Input*: The raw text string from the current conversation turn.
+**TIER 2: GENERAL MEMORIES (Biographical & Tastes)**
+* **Scope:** Projects, specific tech stack skills, pets, likes/dislikes.
+* **Action:** Refine vague memories into specific ones.
 
-### OUTPUT INSTRUCTIONS
-1.  **Reasoning Scratchpad:** You MUST begin by writing a "reasoning_scratchpad". List the facts extracted, identify specific memory_id's that conflict, and justify your decision to Delete or Insert.
-2.  **Strict JSON:** Output the final result as a JSON object adhering to the schema. 
-3.  **ID Integrity:** When using *DELETE*, you MUST use the exact *memory_id* provided in *Existing_Memories*. Never invent an ID.
+### INPUT DATA
+1.  *Existing_Core_Memories*: List of { "id": "1", "text": "..." }
+2.  *Existing_General_Memories*: List of { "id": "101", "text": "..." }
+3.  *User_Input*: The new text to process.
+
+### PROCESS (The Analyst Workbench)
+In your "step_1_critical_reasoning" field:
+1.  **Filter:** explicitly state what you are IGNORING (e.g., "Ignored 'Hi' as chitchat").
+2.  **Extract:** List the actual memory-worthy facts.
+3.  **Target:** Identify specific IDs to DELETE.
+4.  **Decide:** List the Kill List and the New Entries.
+
+### ID HANDLING
+* **CRITICAL:** When generating a DELETE action, you MUST output the exact Integer ID as a string (e.g., "42").
+
+### ONE-SHOT DEMONSTRATION
+**Input:**
+* Existing_Core_Memories: [{"id": "1", "text": "User lives in Berlin"}, {"id": "2", "text": "User is a Student"}]
+* Existing_General_Memories: [{"id": "55", "text": "User is learning Python basics"}]
+* User_Input: "Hey Gemini! I actually just finished my degree and moved to London! Can you help me write a Go script for my new job? I've stopped using Python btw."
+
+**Correct Output:**
+{
+  "step_1_critical_reasoning": "1. FILTERING: Ignored 'Hey Gemini' (Chitchat). Ignored 'Can you help me write a Go script' (Task Context). \n2. FACTS: User graduated (Student -> Worker), Moved (Berlin -> London), Tech Switch (Drop Python, Add Go). \n3. PREDATORY SCAN: Target ID '1' (Berlin) -> DELETE. Target ID '2' (Student) -> DELETE. Target ID '55' (Python) -> DELETE.",
+  "step_2_core_memory_actions": [
+    { "action_type": "DELETE", "target_memory_id": "1", "payload": null },
+    { "action_type": "INSERT", "payload": "User lives in London, UK.", "target_memory_id": null },
+    { "action_type": "DELETE", "target_memory_id": "2", "payload": null },
+    { "action_type": "INSERT", "payload": "User is a working professional (Graduated).", "target_memory_id": null }
+  ],
+  "step_3_general_memory_actions": [
+    { "action_type": "DELETE", "target_memory_id": "55", "payload": null },
+    { "action_type": "INSERT", "payload": "User codes primarily in Golang and has stopped using Python.", "target_memory_id": null }
+  ]
+}
 `, genai.RoleUser),
 		ResponseMIMEType: "application/json",
 		ThinkingConfig: &genai.ThinkingConfig{
-			ThinkingLevel: "medium",
+			ThinkingLevel:   "high",
+			IncludeThoughts: false,
 		},
 		ResponseJsonSchema: responseSchema,
 	}
@@ -231,24 +305,37 @@ You will receive:
 		slog.Error("Got malformed JSON output from the LLM", "error", err)
 		return nil, err
 	}
-	for idx, _ := range memoryOutput.Actions {
-		if memoryOutput.Actions[idx].ActionType == "DELETE" {
-			slog.Info("Have Delete")
-			if memoryOutput.Actions[idx].TargetMemoryID != nil {
-				slog.Info("Have id", "id", *memoryOutput.Actions[idx].TargetMemoryID)
-				id := *memoryOutput.Actions[idx].TargetMemoryID
+	for idx, _ := range memoryOutput.CoreMemoryActions {
+		if memoryOutput.CoreMemoryActions[idx].ActionType == "DELETE" {
+			slog.Info("Have Core Delete")
+			if memoryOutput.CoreMemoryActions[idx].TargetMemoryID != nil {
+				slog.Info("Have id", "id", *memoryOutput.CoreMemoryActions[idx].TargetMemoryID)
+				id := *memoryOutput.CoreMemoryActions[idx].TargetMemoryID
 				uuid := dMap.IntTOUUID[id]
-				memoryOutput.Actions[idx].TargetMemoryID = &uuid
-				slog.Info("Swapping it for this id", "new_id", *memoryOutput.Actions[idx].TargetMemoryID)
+				memoryOutput.CoreMemoryActions[idx].TargetMemoryID = &uuid
+				slog.Info("Swapping it for this id", "new_id", *memoryOutput.CoreMemoryActions[idx].TargetMemoryID)
 			}
 		}
-
+	}
+	for idx, _ := range memoryOutput.GeneralMemoryActions {
+		if memoryOutput.GeneralMemoryActions[idx].ActionType == "DELETE" {
+			slog.Info("Have General Delete")
+			if memoryOutput.GeneralMemoryActions[idx].TargetMemoryID != nil {
+				slog.Info("Have id", "id", *memoryOutput.GeneralMemoryActions[idx].TargetMemoryID)
+				id := *memoryOutput.GeneralMemoryActions[idx].TargetMemoryID
+				uuid := dMap.IntTOUUID[id]
+				memoryOutput.GeneralMemoryActions[idx].TargetMemoryID = &uuid
+				slog.Info("Swapping it for this id", "new_id", *memoryOutput.GeneralMemoryActions[idx].TargetMemoryID)
+			}
+		}
 	}
 
 	return memoryOutput, nil
 }
 
-func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context) (string, error) {
+func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context) string {
+	ctx, span := Tracer.Start(ctx, "Getting Expanded Query from the LLM")
+	defer span.End()
 	history := GetGeminiHistory(messages)
 	chat, _ := llm.GeminiClient.Chats.Create(ctx, "gemini-3-flash-preview", nil, history)
 	expandQueryPrompt := ` 
@@ -293,23 +380,37 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return ""
 		case <-time.After(retryDuration):
 		}
 		slog.Info("Retrying!")
 	}
 
 	if err != nil {
-		slog.Error("Got this error while trying to Expand Query", "error", err)
-		return "", err
+		slog.Error("Got this error while trying to Expand Query Falling back to messages based query", "error", err)
+		var sb strings.Builder
+		for i := len(messages) - 1; i >= 0; i-- {
+			msgContent := messages[i].Content
+			sb.WriteString(msgContent)
+			sb.WriteString("\n")
+			if sb.Len()+len(msgContent) > 2000 {
+				break
+			}
+		}
+		expandedQuery := sb.String()
+		return expandedQuery
 	}
 
-	return res.Text(), nil
+	return res.Text()
 }
 
 func RetryAbleError(err error) bool {
+	slog.Info("Retryable error was called!")
 	if gErr, ok := err.(*googleapi.Error); ok {
 		slog.Info("Retryable Error", "errcode", gErr.Code)
+		if gErr.Code == 503 {
+			return true
+		}
 		if gErr.Code >= 500 {
 			return true
 		}

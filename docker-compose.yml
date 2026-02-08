@@ -13,8 +13,8 @@ services:
     image: qdrant/qdrant:latest
     container_name: qdrant-gomemory
     ports:
-      - "6336:6334" #this is the grpc port in qdrant.
-      - "6335:6333" #this is the http port in qdrant. 
+      - "6336:6334" # gRPC port
+      - "6335:6333" # HTTP port
 
   # PostgreSQL
   postgres:
@@ -36,5 +36,43 @@ services:
     ports:
       - "50051:50051"
 
+  # Redis (Added)
+  redis:
+    image: redis:latest
+    container_name: Go_Memory_Redis
+    # This enables the AOF persistence we discussed
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Jaeger Tracing (Added)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: Go_Memory_Jaeger
+    user: root  
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      # These 4 lines are required to make persistence work in the all-in-one image
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686" # The UI: http://localhost:16686
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "14250:14250"
+      - "9411:9411"
+    volumes:
+      - jaeger_data:/badger
+
 volumes:
   pg_data:
+  redis_data:
+  jaeger_data: # Added volume for Jaeger persistence
