@@ -9,7 +9,7 @@
 
 ## 🚀 The Core Idea
 
-Solving memory for AI is a massive engineering challenge. **GoMemory** is my aim at cracking it.
+ **GoMemory** aims to provide Memory to AI Agents in the fastest way possible. 
 
 The architecture is built on a specific philosophy: **Slow, high-quality inserts; fast, "dumb" reads.**
 
@@ -41,11 +41,12 @@ This project is built to demonstrate robust **Backend Engineering** principles, 
 
 * **Language**: **Golang** (using `net/http` for a lightweight, dependency-free server core).
 * **Messaging Queue**: **NATS Jetstream**.
-    * *Why?* Memory jobs are critical. I chose NATS Jetstream to ensure persistence and reliability. If the server goes down, the memory jobs are replayed upon recovery.
+    * *Why?* Memory jobs are critical. NATS Jetstream was chosen to ensure persistence and reliability. If the server goes down, the memory jobs are replayed upon recovery.
 * **Core Storage**: **Redis** (for Core Memories).
 * **Vector Database**: **Qdrant** (for General Memories).
 * **Metadata Storage**: **PostgreSQL** (for user metadata).
 * **Observability**: Designed for reliability with error handling and structured logging (`slog`).
+* **Reliability & Lifecycle** GoMemory implements a two-stage graceful shutdown protocol. Upon receiving a SIGTERM, the HTTP layer halts new connections while the background workers drain the NATS Jetstream queue. This ensures that no in-flight memory curation jobs are lost during deployments or restarts.
 
 ## 🧠 Hybrid RAG & AI Pipeline
 
