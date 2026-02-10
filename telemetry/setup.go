@@ -10,7 +10,9 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 // setupOTelSDK bootstraps the OpenTelemetry pipeline.
@@ -76,11 +78,21 @@ func newTracerProvider() (*trace.TracerProvider, error) {
 	if err != nil {
 		return nil, err
 	}
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(
+			// This is the name that will show up in the Jaeger Dropdown
+			semconv.ServiceNameKey.String("Go_Memory_Traces"),
+			semconv.ServiceVersionKey.String("1.0.0"),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
 
+	// 3. Create the Provider
 	tracerProvider := trace.NewTracerProvider(
-		trace.WithBatcher(traceExporter,
-			// Default is 5s. Set to 1s for demonstrative purposes.
-			trace.WithBatchTimeout(time.Second)),
+		trace.WithBatcher(traceExporter, trace.WithBatchTimeout(time.Second)),
+		trace.WithResource(res), // <--- Register the resource here
 	)
 	return tracerProvider, nil
 }

@@ -83,15 +83,25 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 
 func (m *MemoryServer) newHTTPHandler() http.Handler {
 	r := http.NewServeMux()
-	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
-	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
-	r.HandleFunc("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
-	r.HandleFunc("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
-	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
-	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
+	handle := func(pattern string, handlerFunc http.HandlerFunc) {
+		// "pattern" here will be "POST /add_memory", etc.
+		// traceName will be passed to Jaeger as the operation name
+		wrapped := otelhttp.NewHandler(handlerFunc, pattern)
+		r.Handle(pattern, wrapped)
+	}
+
+	// Register routes with the helper
+	handle("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
+	handle("POST /get_memory", convertToHandleFunc(m.GetMemory))
+	handle("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
+	handle("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
+	handle("GET /health", convertToHandleFunc(m.HealthCheck))
+	handle("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
+
+	// Metrics endpoint (Standard, no wrap needed)
 	r.Handle("/metrics", promhttp.Handler())
-	handler := otelhttp.NewHandler(r, "/")
-	return handler
+
+	return r
 }
 
 type APIError struct {
@@ -126,7 +136,7 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("Health check!")
 	writeJSON(w, http.StatusOK, "Server is healthy!")
-	return &APIError{}
+	return nil
 }
 
 var Tracer = otel.Tracer("Go_Memory")

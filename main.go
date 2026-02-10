@@ -109,7 +109,7 @@ func main() {
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}
-	server := api.NewMemoryServer("0.0.0.0:9000", store, memory)
+	server := api.NewMemoryServer(":9000", store, memory)
 	if err := server.Run(ctx, stop); err != nil {
 		slog.Error("Got this error while running the server!", "error", err)
 		panic(err)
