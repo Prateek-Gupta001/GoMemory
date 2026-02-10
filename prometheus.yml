@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s # Scrape every 5 seconds for development (default is 15s)
+
+scrape_configs:
+  - job_name: 'gomemory'
+    metrics_path: '/metrics'
+    static_configs:
+      # CRITICAL: This points to your Go app running on your machine (outside Docker)
+      # If you move your Go app inside Docker later, change this to the container name.
+      - targets: ['172.21.97.207:9000']

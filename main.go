@@ -15,7 +15,6 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
-	"github.com/Prateek-Gupta001/GoMemory/telemetry"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
@@ -93,16 +92,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	shutdown, err := telemetry.InitTracer("Go_Memory")
-	if err != nil {
-		slog.Error("failed to init tracer", "error", err)
-		os.Exit(1)
-	}
-	defer func() {
-		if err := shutdown(context.Background()); err != nil {
-			slog.Error("failed to shutdown tracer", "error", err)
-		}
-	}()
+	// shutdown, err := telemetry.InitTracer("Go_Memory")
+	// if err != nil {
+	// 	slog.Error("failed to init tracer", "error", err)
+	// 	os.Exit(1)
+	// }
+	// defer func() {
+	// 	if err := shutdown(context.Background()); err != nil {
+	// 		slog.Error("failed to shutdown tracer", "error", err)
+	// 	}
+	// }()
 	defer nc.Close()
 	RC := redis.NewRedisCoreMemoryCache()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -110,7 +109,7 @@ func main() {
 	if err != nil {
 		slog.Error("Got this error while trying to intialise the new Qdrant Memory DB", "error", err)
 	}
-	server := api.NewMemoryServer(":9000", store, memory)
+	server := api.NewMemoryServer("0.0.0.0:9000", store, memory)
 	if err := server.Run(ctx, stop); err != nil {
 		slog.Error("Got this error while running the server!", "error", err)
 		panic(err)

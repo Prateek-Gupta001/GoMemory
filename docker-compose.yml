@@ -12,6 +12,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant-gomemory
+    volumes:
+      - qdrant_data:/qdrant/storage
     ports:
       - "6336:6334" # gRPC port
       - "6335:6333" # HTTP port
@@ -19,7 +21,7 @@ services:
   # PostgreSQL
   postgres:
     image: postgres:latest
-    container_name: gomemory
+    container_name: postgres_gomemory
     ports:
       - "5433:5432"
     environment:
@@ -36,25 +38,23 @@ services:
     ports:
       - "50051:50051"
 
-  # Redis (Added)
+  # Redis
   redis:
     image: redis:latest
     container_name: Go_Memory_Redis
-    # This enables the AOF persistence we discussed
     command: redis-server --appendonly yes
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
 
-  # Jaeger Tracing (Added)
+  # Jaeger Tracing
   jaeger:
     image: jaegertracing/all-in-one:latest
-    container_name: Go_Memory_Jaeger
     user: root  
+    container_name: Go_Memory_Jaeger
     environment:
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
-      # These 4 lines are required to make persistence work in the all-in-one image
       - SPAN_STORAGE_TYPE=badger
       - BADGER_EPHEMERAL=false
       - BADGER_DIRECTORY_VALUE=/badger/data
@@ -72,7 +72,26 @@ services:
     volumes:
       - jaeger_data:/badger
 
+  # Prometheus (Added)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: Go_Memory_Prometheus
+    ports:
+      - "9090:9090" # The UI: http://localhost:9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Maps your local config file
+      - prometheus_data:/prometheus # Persists the time-series data
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Allows access to localhost:9000
+
 volumes:
   pg_data:
   redis_data:
-  jaeger_data: # Added volume for Jaeger persistence
+  jaeger_data:
+  qdrant_data:
+  prometheus_data: # Added volume for Prometheus persistence

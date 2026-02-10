@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,8 +14,11 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
+	"github.com/Prateek-Gupta001/GoMemory/telemetry"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -36,10 +40,18 @@ func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Mem
 func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err error) {
 
 	defer stop()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx)
+	if err != nil {
+		return err
+	}
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
 	srv := &http.Server{
 		Addr:         m.listenAddr,
 		ReadTimeout:  time.Second * 10,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: time.Second * 10,
 		Handler:      m.newHTTPHandler(),
 	}
 	srvErr := make(chan error, 1)
@@ -60,7 +72,8 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 	}
 
 	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
-	timeCtx, _ := context.WithTimeout(context.Background(), time.Second*50)
+	slog.Info("Closing all api routes!")
+	timeCtx, _ := context.WithTimeout(context.Background(), time.Second*5)
 	err = srv.Shutdown(timeCtx)
 	slog.Info("Stopping all currently ongoing memory jobs.")
 	m.memory.StopMemoryAgent()
@@ -76,7 +89,9 @@ func (m *MemoryServer) newHTTPHandler() http.Handler {
 	r.HandleFunc("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
 	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
 	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
-	return r
+	r.Handle("/metrics", promhttp.Handler())
+	handler := otelhttp.NewHandler(r, "/")
+	return handler
 }
 
 type APIError struct {
