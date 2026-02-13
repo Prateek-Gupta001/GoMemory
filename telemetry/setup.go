@@ -102,8 +102,15 @@ func newMeterProvider() (*metric.MeterProvider, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(
+			// This is the name that will show up in the Jaeger Dropdown
+			semconv.ServiceNameKey.String("Go_Memory_Metrics"),
+			semconv.ServiceVersionKey.String("1.0.0"),
+		),
+	)
 	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res), // <--- ADD THIS (Critical for Grafana filtering)
 		metric.WithReader(metricExporter),
 	)
 	return meterProvider, err
