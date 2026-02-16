@@ -23,7 +23,8 @@ import (
 
 type Memory interface {
 	GetMemories(user_query string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) //For normal messages
-	DeleteMemory(memoryIds []string, ctx context.Context) error                                                                 //from the db
+	DeleteMemory(memoryIds []string, ctx context.Context) error
+	DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error //from the db
 	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
@@ -148,6 +149,14 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 
 func (m *MemoryAgent) DeleteMemory(memoryIds []string, ctx context.Context) error {
 	err := m.Vectordb.DeleteMemories(memoryIds, ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MemoryAgent) DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error {
+	err := m.CoreMemoryCache.DeleteCoreMemory(memoryIds, userId, ctx)
 	if err != nil {
 		return err
 	}

@@ -96,7 +96,8 @@ func (m *MemoryServer) newHTTPHandler() http.Handler {
 	handle("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
 	handle("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
 	handle("GET /health", convertToHandleFunc(m.HealthCheck))
-	handle("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
+	handle("POST /delete_memory/general", convertToHandleFunc(m.DeleteGeneralMemory))
+	handle("POST /delete_memory/core", convertToHandleFunc(m.DeleteCoreMemory))
 
 	// Metrics endpoint (Standard, no wrap needed)
 	r.Handle("/metrics", promhttp.Handler())
@@ -337,7 +338,7 @@ func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *
 	return nil
 }
 
-func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) *APIError {
+func (m *MemoryServer) DeleteGeneralMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	//TODO: Update this endpoint to take in core memory Ids as well!
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
 	ctx, span := Tracer.Start(ctx, "DeleteUserMemory")
@@ -357,6 +358,39 @@ func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		span.RecordError(err)
 		slog.Error("Got this error while trying to delete memory", "error", err, "userId", req.UserId)
+		return &APIError{
+			Message: "Deletion failed",
+			Error:   err,
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	return &APIError{
+		Error:   nil,
+		Message: "Memory Deletion succesful",
+		Status:  http.StatusOK,
+	}
+}
+
+func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	//TODO: Update this endpoint to take in core memory Ids as well!
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, span := Tracer.Start(ctx, "DeleteCoreMemory")
+	defer span.End()
+	defer cancel()
+	req := &types.DeleteMemoryRequest{}
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		return &APIError{
+			Message: "Bad request",
+			Error:   err,
+			Status:  http.StatusBadRequest,
+		}
+	}
+	span.SetAttributes(attribute.String("userId", req.UserId))
+	err := m.memory.DeleteCoreMemory(req.MemoryIds, req.UserId, ctx)
+	if err != nil {
+		span.RecordError(err)
+		slog.Error("Got this error while trying to delete core memory", "error", err, "userId", req.UserId)
 		return &APIError{
 			Message: "Deletion failed",
 			Error:   err,

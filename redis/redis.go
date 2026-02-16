@@ -13,7 +13,7 @@ import (
 type CoreMemoryCache interface {
 	GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error)
 	SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error
-	DeleteCoreMemory(CoreMemoryId string, ctx context.Context) error
+	DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error
 }
 
 type RedisCoreMemoryCache struct {
@@ -74,12 +74,29 @@ func (r *RedisCoreMemoryCache) SetCoreMemory(userId string, CoreMemories []types
 	return nil
 }
 
-func (r *RedisCoreMemoryCache) DeleteCoreMemory(CoreMemoryId string, ctx context.Context) error {
+func (r *RedisCoreMemoryCache) DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error {
 	ctx, span := Tracer.Start(ctx, "Deleting Core Memories in Redis")
 	defer span.End()
-	//TODO: Setup a system for deleting core memories ..
-
-	// err := r.RedisClient.del
+	core_mems, err := r.GetCoreMemory(userId, ctx)
+	if err != nil {
+		slog.Warn("Got this error while trying to delete core memories", "error", err)
+		return err
+	}
+	idsToRemove := make(map[string]bool, len(CoreMemoryIds))
+	for _, id := range CoreMemoryIds {
+		idsToRemove[id] = true
+	}
+	newCoreMem := make([]types.Memory, 0, len(CoreMemoryIds))
+	for _, mem := range core_mems {
+		if !idsToRemove[mem.Memory_Id] {
+			newCoreMem = append(newCoreMem, mem)
+		}
+	}
+	err = r.SetCoreMemory(userId, newCoreMem, ctx)
+	if err != nil {
+		slog.Warn("Got this error while trying to delete core memories", "error", err)
+		return err
+	}
 
 	return nil
 }

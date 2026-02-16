@@ -11,6 +11,7 @@ import numpy as np
 import logging
 from typing import List, Tuple
 import os
+import time
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
@@ -199,6 +200,8 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
                 context.set_details("No queries provided")
                 return embeddingService_pb2.Embeddings()
             
+            _start_time = time.time()
+
             # Run dense and sparse embeddings concurrently for maximum performance
             # Note: The input 'queries' list is passed to both; they handle their own
             # string processing internally so there are no race conditions.
@@ -225,6 +228,9 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
                 )
                 sparse_embeddings.append(sparse_embedding_msg)
             
+            _elapsed_ms = (time.time() - _start_time) * 1000
+            logger.info(f"CreateEmbeddings completed in {_elapsed_ms:.2f}ms for {len(queries)} queries")
+
             logger.info(f"Successfully created embeddings for {len(queries)} queries")
             
             return embeddingService_pb2.Embeddings(
@@ -258,8 +264,13 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
                 context.set_details("Empty query provided")
                 return embeddingService_pb2.DenseEmbedding()
             
+            _start_time = time.time()
+
             # Generate dense embedding
             dense_emb = self._get_dense_embedding(query)
+
+            _elapsed_ms = (time.time() - _start_time) * 1000
+            logger.info(f"CreateDenseEmbedding completed in {_elapsed_ms:.2f}ms")
             
             logger.info(f"Successfully created dense embedding (dim: {len(dense_emb)})")
             
