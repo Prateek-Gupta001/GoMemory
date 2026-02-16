@@ -46,16 +46,14 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
         self.executor = ThreadPoolExecutor(max_workers=2)
     
     def _get_dense_embedding(self, query: str) -> np.ndarray:
-        """
-        Generate dense embedding for a single query
-        
-        Args:
-            query: Input text string
-            
-        Returns:
-            numpy array of dense embedding values
-        """
         try:
+            prefix = "_Query_"
+            bge_instruction = "Represent this sentence for searching relevant passages: "
+            
+            if query.startswith(prefix):
+                logger.info("Query prefix detected, prepending BGE instruction")
+                query = bge_instruction + query[len(prefix):]
+            
             embedding = list(self.dense_model([query]))[0]
             return embedding.astype(np.float32)
         except Exception as e:

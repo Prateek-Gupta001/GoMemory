@@ -50,7 +50,7 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 	}()
 	srv := &http.Server{
 		Addr:         m.listenAddr,
-		ReadTimeout:  time.Second * 10,
+		ReadTimeout:  time.Second * 5,
 		WriteTimeout: time.Second * 10,
 		Handler:      m.newHTTPHandler(),
 	}
@@ -296,7 +296,10 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 }
 
 func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *APIError {
-	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*10)
+	slog.Info("Waiting for 5 seconds")
+	time.Sleep(time.Second * 5)
+	slog.Info("Wait over!")
 	ctx, span := Tracer.Start(ctx, "GetCoreMemories")
 	defer span.End()
 	defer cancel()
