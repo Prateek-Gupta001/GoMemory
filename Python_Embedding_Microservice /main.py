@@ -54,7 +54,7 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
                 logger.info("Query prefix detected, prepending BGE instruction")
                 query = bge_instruction + query[len(prefix):]
             
-            embedding = list(self.dense_model([query]))[0]
+            embedding = list(self.dense_model.embed([query]))[0]
             return embedding.astype(np.float32)
         except Exception as e:
             logger.error(f"Error generating dense embedding: {e}")
