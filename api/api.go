@@ -298,9 +298,6 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 
 func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *APIError {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second*10)
-	slog.Info("Waiting for 5 seconds")
-	time.Sleep(time.Second * 5)
-	slog.Info("Wait over!")
 	ctx, span := Tracer.Start(ctx, "GetCoreMemories")
 	defer span.End()
 	defer cancel()
@@ -364,11 +361,7 @@ func (m *MemoryServer) DeleteGeneralMemory(w http.ResponseWriter, r *http.Reques
 			Status:  http.StatusInternalServerError,
 		}
 	}
-	return &APIError{
-		Error:   nil,
-		Message: "Memory Deletion succesful",
-		Status:  http.StatusOK,
-	}
+	return nil
 }
 
 func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) *APIError {
@@ -397,11 +390,7 @@ func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) 
 			Status:  http.StatusInternalServerError,
 		}
 	}
-	return &APIError{
-		Error:   nil,
-		Message: "Memory Deletion succesful",
-		Status:  http.StatusOK,
-	}
+	return nil
 }
 
 func ConstructContextualQuery(messages []types.Message, charLimit int) string {

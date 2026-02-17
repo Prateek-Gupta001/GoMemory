@@ -34,7 +34,7 @@ services:
   # Python Embedding Microservice
   embedding:
     image: prateek329/embedding-service
-    container_name: embedding-microservice
+    container_name: embedding-microservice-gomemory
     ports:
       - "50051:50051"
 

@@ -97,6 +97,9 @@ func (r *RedisCoreMemoryCache) DeleteCoreMemory(CoreMemoryIds []string, userId s
 		slog.Warn("Got this error while trying to delete core memories", "error", err)
 		return err
 	}
+	if len(newCoreMem) == len(core_mems) {
+		slog.Info("Core Memory Ids provided don't exist for the user.")
+	}
 
 	return nil
 }
