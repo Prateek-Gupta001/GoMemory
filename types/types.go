@@ -1,5 +1,7 @@
 package types
 
+import "errors"
+
 type MemoryRetrievalRequest struct {
 	UserId    string    `json:"userId"`
 	Messages  []Message `json:"messages,omitempty"`
@@ -13,16 +15,14 @@ type InsertMemoryRequest struct {
 	Messages []Message `json:"messages"`
 }
 
-type GetAllUserMemoriesRequest struct {
-	UserId string `json:"userId"`
-}
-
 type DeleteMemoryRequest struct {
 	UserId    string   `json:"userId"`
 	MemoryIds []string `json:"memoryId"`
 }
 
 const UserIdKey ctxKey = iota
+
+var ErrUserNotFound = errors.New("user doesn't exist")
 
 type ctxKey int
 

@@ -6,11 +6,13 @@ import (
 	"log/slog"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 )
 
 type CoreMemoryCache interface {
+	CreateUser(context.Context) (string, error)
 	GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error)
 	SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error
 	DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error
@@ -34,6 +36,16 @@ func NewRedisCoreMemoryCache() *RedisCoreMemoryCache {
 	}
 }
 
+func (r *RedisCoreMemoryCache) CreateUser(ctx context.Context) (string, error) {
+	userId := uuid.New()
+	err := r.SetCoreMemory(userId.String(), []types.Memory{}, ctx)
+	if err != nil {
+		return "", err
+	}
+	slog.Info("User Id generated is", "userId", userId.String())
+	return userId.String(), nil
+}
+
 // Get Core Memories from the Redis Cache. It return nil,nil if the user has currently no core memories.
 func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error) {
 	ctx, span := Tracer.Start(ctx, "Getting Core Memories from Redis")
@@ -42,10 +54,10 @@ func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context)
 	if err != nil {
 		if err == redis.Nil {
 			slog.Info("Cache miss! The user has no core memories!", "userId", userId)
-			return nil, nil
+			return nil, types.ErrUserNotFound
 		}
 		slog.Error("Got this error while trying to get core memories of the user! redis error", "userId", userId, "error", err)
-		return nil, err
+		return []types.Memory{}, err
 	}
 	v := &[]types.Memory{}
 	err = json.Unmarshal(res, v)

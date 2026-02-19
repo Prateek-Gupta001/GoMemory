@@ -29,7 +29,7 @@ type Memory interface {
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	StopMemoryAgent()
-	// in the future: delete user's memories and delete memory by Id...
+	CreateUser(ctx context.Context) (string, error)
 }
 
 type MemoryAgent struct {
@@ -119,6 +119,14 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 	return err
 }
 
+func (m *MemoryAgent) CreateUser(ctx context.Context) (string, error) {
+	userId, err := m.CoreMemoryCache.CreateUser(ctx)
+	if err != nil {
+		return "", err
+	}
+	return userId, nil
+}
+
 func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error) {
 	mem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
 	if err != nil {
@@ -142,8 +150,14 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 	CoreMemories, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get core memories", "userId", userId, "error", err)
+		if err == types.ErrUserNotFound {
+			return nil, err
+		}
 	}
 	Memories := append(CoreMemories, GeneralMemories...)
+	if Memories == nil {
+		Memories = []types.Memory{}
+	}
 	return Memories, nil
 }
 
@@ -308,6 +322,9 @@ func (m *MemoryAgent) GetAllUserMemories(userId string, ctx context.Context) ([]
 	}
 	CoreMem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
 	if err != nil {
+		if err == types.ErrUserNotFound {
+			return nil, err
+		}
 		slog.Warn("Got this error while trying to get core memories of the user (in the memory agent)", "error", err, "userId", userId)
 	}
 	AllMem := append(CoreMem, Generalmem...)

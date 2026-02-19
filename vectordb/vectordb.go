@@ -99,12 +99,12 @@ func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbeddin
 	})
 	if err != nil {
 		slog.Error("Got this error while trying to get similar memories", "error", err)
-		return nil, err
+		return []types.Memory{}, err
 	}
 	var Memories []types.Memory
 	if len(res) == 0 {
 		slog.Info("No Memories of the user found", "userId", userId)
-		return nil, nil
+		return []types.Memory{}, nil
 	}
 	for _, r := range res {
 		y := r.Payload
@@ -131,6 +131,8 @@ func (qdb *QdrantMemoryDB) InsertNewMemories(DenseEmbedding []types.DenseEmbeddi
 	defer span.End()
 	var Points []*qdrant.PointStruct
 	for idx, sp := range SparseEmbeddings {
+		//intialising the id this way ensures that a user with a specific Id will never have the same memory string (exact same) stored twice.
+		//TODO: In future you could potentially add memory filters which could be a background job in which you see if two memories are too similar then you remove them.
 		id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(memories[idx]+userId)).String()
 		Points = append(Points,
 			&qdrant.PointStruct{

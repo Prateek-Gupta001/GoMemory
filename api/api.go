@@ -98,6 +98,7 @@ func (m *MemoryServer) newHTTPHandler() http.Handler {
 	handle("GET /health", convertToHandleFunc(m.HealthCheck))
 	handle("POST /delete_memory/general", convertToHandleFunc(m.DeleteGeneralMemory))
 	handle("POST /delete_memory/core", convertToHandleFunc(m.DeleteCoreMemory))
+	handle("GET /create/user", convertToHandleFunc(m.CreateNewUser))
 
 	// Metrics endpoint (Standard, no wrap needed)
 	r.Handle("/metrics", promhttp.Handler())
@@ -143,7 +144,7 @@ func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIE
 var Tracer = otel.Tracer("Go_Memory")
 
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
-	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")
+	slog.Info("------------------------------------------------NEW INSERT MEMORY REQUEST------------------------------------------------")
 	req := &types.InsertMemoryRequest{}
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -178,7 +179,25 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
+func (m *MemoryServer) CreateNewUser(w http.ResponseWriter, r *http.Request) *APIError {
+	userId, err := m.memory.CreateUser(r.Context())
+	if err != nil {
+		slog.Error("Got this error when trying to create a new user", "error", err)
+		return &APIError{
+			Error:   err,
+			Message: "We are experiencing some troubles at the moment .. please try again after some time",
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	slog.Info("USER ID", "userId", userId)
+	writeJSON(w, http.StatusOK, struct {
+		UserId string `json:"userId"`
+	}{UserId: userId})
+	return nil
+}
+
 func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	slog.Info("------------------------------------------------NEW GET MEMORY REQUEST------------------------------------------------")
 
 	var req = &types.MemoryRetrievalRequest{}
 	ctx, cancel := context.WithCancel(r.Context())
@@ -247,8 +266,13 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			}
 		}
 		writeJSON(w, http.StatusOK, Memories)
+		return nil
 	}
-	return nil
+	return &APIError{
+		Status:  http.StatusBadRequest,
+		Message: "Atleast one input parameter (user query or messages) must be provided!",
+		Error:   fmt.Errorf("No input parameter provided for get memory!"),
+	}
 }
 
 func GetId(r *http.Request) (string, error) {
