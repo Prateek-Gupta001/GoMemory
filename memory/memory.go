@@ -25,35 +25,42 @@ type Memory interface {
 	GetMemories(user_query string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) //For normal messages
 	DeleteMemory(memoryIds []string, ctx context.Context) error
 	DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error //from the db
-	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
+	SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	StopMemoryAgent()
 	CreateUser(ctx context.Context) (string, error)
+	GetReqStatus(ctx context.Context, reqId string) (*FullReqStatus, error)
+}
+
+type FullReqStatus struct {
+	Status    types.ReqStatus `json:"status"`
+	Error     string          `json:"error,omitempty"`
+	CreatedAt string          `json:"createdAt"`
 }
 
 type MemoryAgent struct {
-	Vectordb        vectordb.VectorDB
-	MemoryAgentCtx  context.Context
-	LLM             llm.LLM
-	EmbedClient     embed.Embed
-	CoreMemoryCache redis.CoreMemoryCache
-	JSClient        nats.JetStreamContext
-	WG              *sync.WaitGroup
-	ActiveJobs      *sync.WaitGroup
+	Vectordb         vectordb.VectorDB
+	MemoryAgentCtx   context.Context
+	LLM              llm.LLM
+	EmbedClient      embed.Embed
+	OperationalStore redis.OperationalStore
+	JSClient         nats.JetStreamContext
+	WG               *sync.WaitGroup
+	ActiveJobs       *sync.WaitGroup
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.CoreMemoryCache, queueLen int, numWorker int, MemoryAgentCtx context.Context) (*MemoryAgent, error) {
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.OperationalStore, queueLen int, numWorker int, MemoryAgentCtx context.Context) (*MemoryAgent, error) {
 	wg := &sync.WaitGroup{}
 	m := &MemoryAgent{
-		Vectordb:        vectordb,
-		LLM:             llm,
-		EmbedClient:     embedClient,
-		CoreMemoryCache: RC,
-		JSClient:        nc,
-		MemoryAgentCtx:  MemoryAgentCtx,
-		WG:              wg,
-		ActiveJobs:      &sync.WaitGroup{},
+		Vectordb:         vectordb,
+		LLM:              llm,
+		EmbedClient:      embedClient,
+		OperationalStore: RC,
+		JSClient:         nc,
+		MemoryAgentCtx:   MemoryAgentCtx,
+		WG:               wg,
+		ActiveJobs:       &sync.WaitGroup{},
 	}
 	for i := 0; i < numWorker; i++ {
 		m.WG.Add(1)
@@ -85,13 +92,16 @@ func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
 			msg.Term()
 			return
 		}
+		m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, "", types.Processing)
 		if err := m.InsertMemory(memJob); err != nil {
+			m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, err.Error(), types.Failure)
 			slog.Info("Memory worker encountered an error while working", "error", err, "reqId", memJob.ReqId, "userId", memJob.UserId)
 			//TODO: Check from InsertMemory if its a deterministic error or not .. if its an API server issue or an OpenAI issue or an LLM issue
 			//TODO: .. You would wanna retry the job .. in that case .. otherwise not!
 			msg.Term()
 			return
 		}
+		m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, "", types.Success)
 		msg.Ack()
 	})
 	if err != nil {
@@ -107,9 +117,10 @@ func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
 	}
 }
 
-func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
+func (m *MemoryAgent) SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
 
 	slog.Info("Memory Job inserted successfully into NATS-Jetstream ", "reqId", memJob.ReqId)
+	m.OperationalStore.CreateReq(memJob.ReqId, context.Background())
 	memJson, err := json.Marshal(memJob)
 	if err != nil {
 		slog.Info("Got this error while marshalling the MemoryInsertionJob ", "error", err)
@@ -120,15 +131,27 @@ func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJ
 }
 
 func (m *MemoryAgent) CreateUser(ctx context.Context) (string, error) {
-	userId, err := m.CoreMemoryCache.CreateUser(ctx)
+	userId, err := m.OperationalStore.CreateUser(ctx)
 	if err != nil {
 		return "", err
 	}
 	return userId, nil
 }
 
+func (m *MemoryAgent) GetReqStatus(ctx context.Context, reqId string) (*FullReqStatus, error) {
+	res, err := m.OperationalStore.GetReqStatus(ctx, reqId)
+	if err != nil {
+		return nil, err
+	}
+	stat := FullReqStatus{}
+	stat.CreatedAt = res["createdAt"]
+	stat.Error = res["error"]
+	stat.Status = types.ReqStatus(res["status"])
+	return &stat, nil
+}
+
 func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error) {
-	mem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	mem, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get the core memories of the user", "userId", userId)
 		return nil, err
@@ -147,7 +170,7 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 	if err != nil {
 		slog.Warn("Got this error while getting similar memories! Trying to get Core Memories now", "error", err, "reqId", reqId)
 	}
-	CoreMemories, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	CoreMemories, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get core memories", "userId", userId, "error", err)
 		if err == types.ErrUserNotFound {
@@ -170,7 +193,7 @@ func (m *MemoryAgent) DeleteMemory(memoryIds []string, ctx context.Context) erro
 }
 
 func (m *MemoryAgent) DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error {
-	err := m.CoreMemoryCache.DeleteCoreMemory(memoryIds, userId, ctx)
+	err := m.OperationalStore.DeleteCoreMemory(memoryIds, userId, ctx)
 	if err != nil {
 		return err
 	}
@@ -211,7 +234,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	if err != nil {
 		slog.Warn("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 	}
-	Existing_Core_Memories, err := m.CoreMemoryCache.GetCoreMemory(memjob.UserId, ctx)
+	Existing_Core_Memories, err := m.OperationalStore.GetCoreMemory(memjob.UserId, ctx)
 	if err != nil {
 		slog.Warn("Got this as the ERROR while getting exisiting core memories", "userId", memjob.UserId, "err", err)
 	}
@@ -287,7 +310,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	NewMem := append(UpdatedCoreMemories, CoreMemories...)
 	if updated {
 		slog.Info("Core Memories have been updated!", "userId", memjob.UserId, "Old Core Memories", Existing_Core_Memories, "New Core Memories", NewMem, "LLM's thinking", MemoryOutput.Reasoning)
-		err := m.CoreMemoryCache.SetCoreMemory(memjob.UserId, NewMem, ctx)
+		err := m.OperationalStore.SetCoreMemory(memjob.UserId, NewMem, ctx)
 		if err != nil {
 			slog.Warn("Got this error while trying to set the core memories of the user", "userId", memjob.UserId, "err", err)
 		}
@@ -320,7 +343,7 @@ func (m *MemoryAgent) GetAllUserMemories(userId string, ctx context.Context) ([]
 	if err != nil {
 		slog.Warn("Got this error while trying to get general  memories of the user (in the memory agent)", "error", err, "userId", userId)
 	}
-	CoreMem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	CoreMem, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		if err == types.ErrUserNotFound {
 			return nil, err

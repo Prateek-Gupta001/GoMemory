@@ -61,6 +61,15 @@ const (
 	MemoryTypeGeneral MemoryType = "general"
 )
 
+type ReqStatus string
+
+const (
+	Pending    ReqStatus = "pending"
+	Processing ReqStatus = "processing"
+	Success    ReqStatus = "success"
+	Failure    ReqStatus = "failure"
+)
+
 type Memory struct {
 	Memory_text string
 	Type        MemoryType

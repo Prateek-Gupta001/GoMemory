@@ -103,7 +103,7 @@ func main() {
 	// 	}
 	// }()
 	defer nc.Close()
-	RC := redis.NewRedisCoreMemoryCache()
+	RC := redis.NewRedisOperationalStore()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, RC, 5000, 2, ctx)
 	if err != nil {

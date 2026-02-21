@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/google/uuid"
@@ -11,32 +12,35 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-type CoreMemoryCache interface {
+type OperationalStore interface {
 	CreateUser(context.Context) (string, error)
 	GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error)
 	SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error
 	DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error
+	CreateReq(reqId string, ctx context.Context) error
+	ChangeReqStatus(ctx context.Context, reqId string, Error string, status types.ReqStatus) error
+	GetReqStatus(ctx context.Context, reqId string) (map[string]string, error)
 }
 
-type RedisCoreMemoryCache struct {
+type RedisOperationalStore struct {
 	RedisClient *redis.Client
 }
 
 var Tracer = otel.Tracer("Go_Memory")
 
-func NewRedisCoreMemoryCache() *RedisCoreMemoryCache {
+func NewRedisOperationalStore() *RedisOperationalStore {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "", // no password
 		DB:       0,  // use default DB
 		Protocol: 2,
 	})
-	return &RedisCoreMemoryCache{
+	return &RedisOperationalStore{
 		RedisClient: rdb,
 	}
 }
 
-func (r *RedisCoreMemoryCache) CreateUser(ctx context.Context) (string, error) {
+func (r *RedisOperationalStore) CreateUser(ctx context.Context) (string, error) {
 	userId := uuid.New()
 	err := r.SetCoreMemory(userId.String(), []types.Memory{}, ctx)
 	if err != nil {
@@ -46,8 +50,39 @@ func (r *RedisCoreMemoryCache) CreateUser(ctx context.Context) (string, error) {
 	return userId.String(), nil
 }
 
+func (r *RedisOperationalStore) GetReqStatus(ctx context.Context, reqId string) (map[string]string, error) {
+	res, err := r.RedisClient.HGetAll(ctx, reqId).Result()
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (r *RedisOperationalStore) ChangeReqStatus(ctx context.Context, reqId string, Error string, status types.ReqStatus) error {
+	_, err := r.RedisClient.HSet(ctx, reqId, []string{"status", string(status), "error", Error}).Result()
+	if err != nil {
+		slog.Warn("Got this error while trying to change the req status", "error", err)
+		return err
+	}
+	slog.Info("Request status updation was successful!")
+	return nil
+}
+func (r *RedisOperationalStore) CreateReq(reqId string, ctx context.Context) error {
+	_, err := r.RedisClient.HSet(ctx, reqId, []string{"status", string(types.Pending), "error", "", "createdAt", time.Now().String()}).Result()
+	if err != nil {
+		return err
+	}
+	_, err = r.RedisClient.Expire(ctx, reqId, 24*time.Hour).Result()
+	if err != nil {
+		slog.Error("Got this error while trying to set the expiration for this reqId", "reqId", reqId, "error", err)
+		return err
+	}
+	slog.Info("Request creation was successful!")
+	return nil
+}
+
 // Get Core Memories from the Redis Cache. It return nil,nil if the user has currently no core memories.
-func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error) {
+func (r *RedisOperationalStore) GetCoreMemory(userId string, ctx context.Context) ([]types.Memory, error) {
 	ctx, span := Tracer.Start(ctx, "Getting Core Memories from Redis")
 	defer span.End()
 	res, err := r.RedisClient.Get(ctx, userId).Bytes()
@@ -70,7 +105,7 @@ func (r *RedisCoreMemoryCache) GetCoreMemory(userId string, ctx context.Context)
 	return *v, nil
 }
 
-func (r *RedisCoreMemoryCache) SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error {
+func (r *RedisOperationalStore) SetCoreMemory(userId string, CoreMemories []types.Memory, ctx context.Context) error {
 	ctx, span := Tracer.Start(ctx, "Setting Core Memories in Redis")
 	defer span.End()
 	jsonBytes, err := json.Marshal(CoreMemories)
@@ -86,7 +121,7 @@ func (r *RedisCoreMemoryCache) SetCoreMemory(userId string, CoreMemories []types
 	return nil
 }
 
-func (r *RedisCoreMemoryCache) DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error {
+func (r *RedisOperationalStore) DeleteCoreMemory(CoreMemoryIds []string, userId string, ctx context.Context) error {
 	ctx, span := Tracer.Start(ctx, "Deleting Core Memories in Redis")
 	defer span.End()
 	core_mems, err := r.GetCoreMemory(userId, ctx)

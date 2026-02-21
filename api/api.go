@@ -95,10 +95,11 @@ func (m *MemoryServer) newHTTPHandler() http.Handler {
 	handle("POST /get_memory", convertToHandleFunc(m.GetMemory))
 	handle("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
 	handle("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
+	handle("GET /get_status/{id}", convertToHandleFunc(m.CheckReqStatus))
 	handle("GET /health", convertToHandleFunc(m.HealthCheck))
 	handle("POST /delete_memory/general", convertToHandleFunc(m.DeleteGeneralMemory))
 	handle("POST /delete_memory/core", convertToHandleFunc(m.DeleteCoreMemory))
-	handle("GET /create/user", convertToHandleFunc(m.CreateNewUser))
+	handle("POST /create/user", convertToHandleFunc(m.CreateNewUser))
 
 	// Metrics endpoint (Standard, no wrap needed)
 	r.Handle("/metrics", promhttp.Handler())
@@ -163,7 +164,7 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 		UserId:    req.UserId,
 		Threshold: 0.6,
 	}
-	err := m.memory.SumbitMemoryInsertionRequest(memJob)
+	err := m.memory.SubmitMemoryInsertionRequest(memJob)
 	if err != nil {
 		slog.Info("Got this error while trying to insert memory", "error", err)
 		return &APIError{
@@ -176,6 +177,29 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 		ReqId: reqId,
 		Msg:   "Memory Insertion Job has been queued for insertion!",
 	})
+	return nil
+}
+
+func (m *MemoryServer) CheckReqStatus(w http.ResponseWriter, r *http.Request) *APIError {
+	reqId, err := GetId(r)
+	if err != nil {
+		slog.Error("Got this error while getting Id for GetAllUserMemories", "error", err)
+		return &APIError{
+			Error:   err,
+			Message: "Bad Request",
+			Status:  http.StatusBadRequest,
+		}
+	}
+	status, err := m.memory.GetReqStatus(r.Context(), reqId)
+	if err != nil {
+		slog.Error("Got this error while trying to get the req status", "error", err)
+		return &APIError{
+			Error:   err,
+			Message: "We are experiencing some techincal issues right now. Please try again after some time!",
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	writeJSON(w, http.StatusOK, status)
 	return nil
 }
 
