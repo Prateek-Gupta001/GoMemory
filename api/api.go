@@ -219,7 +219,7 @@ func (m *MemoryServer) CheckReqStatus(w http.ResponseWriter, r *http.Request) *A
 	}
 	status, err := m.memory.GetReqStatus(r.Context(), reqId)
 	if err != nil {
-		slog.Error("Got this error while trying to get the req status", "error", err)
+		slog.Error("Got this error while trying to get the req status", "error", err, "id", reqId)
 		return &APIError{
 			Error:   err,
 			Message: "We are experiencing some techincal issues right now. Please try again after some time!",

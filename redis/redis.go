@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -54,6 +55,9 @@ func (r *RedisOperationalStore) GetReqStatus(ctx context.Context, reqId string) 
 	res, err := r.RedisClient.HGetAll(ctx, reqId).Result()
 	if err != nil {
 		return nil, err
+	}
+	if len(res) == 0 {
+		return nil, fmt.Errorf("Request doesn't exist!")
 	}
 	return res, nil
 }
