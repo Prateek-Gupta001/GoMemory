@@ -103,7 +103,7 @@ func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
 		}
 		m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, "", types.Success)
 		msg.Ack()
-	})
+	}, nats.AckWait(time.Minute*2))
 	if err != nil {
 		slog.Error("Got this error while trying to subscribe to the NATJetstream queue", "error", err)
 		return
@@ -118,16 +118,32 @@ func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
 }
 
 func (m *MemoryAgent) SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
-
 	slog.Info("Memory Job inserted successfully into NATS-Jetstream ", "reqId", memJob.ReqId)
-	m.OperationalStore.CreateReq(memJob.ReqId, context.Background())
+	err := m.OperationalStore.CreateReq(memJob.ReqId, context.Background())
+	if err != nil {
+		slog.Warn("Got this error while trying to submit memory insertion request", "error", err)
+		if err == types.DuplicateError {
+			return err
+		}
+		slog.Info("Failing create req silently") //if it's not duplicate stuff .. memory jobs are assumed to be crucial and should be processed anyway.
+	}
 	memJson, err := json.Marshal(memJob)
 	if err != nil {
 		slog.Info("Got this error while marshalling the MemoryInsertionJob ", "error", err)
 		return err
 	}
-	_, err = m.JSClient.Publish("memory_work", memJson)
-	return err
+	msg := &nats.Msg{
+		Subject: "memory_work",
+		Data:    memJson,
+		Header:  nats.Header{},
+	}
+	msg.Header.Set(nats.MsgIdHdr, memJob.ReqId)
+	_, err = m.JSClient.PublishMsg(msg)
+	if err != nil {
+		slog.Error("Got this error while publishing message to the nats-jetstream queue", "error", err)
+		return err
+	}
+	return nil
 }
 
 func (m *MemoryAgent) CreateUser(ctx context.Context) (string, error) {

@@ -23,6 +23,7 @@ type DeleteMemoryRequest struct {
 const UserIdKey ctxKey = iota
 
 var ErrUserNotFound = errors.New("user doesn't exist")
+var DuplicateError = errors.New("Duplicate Request that was either successful, pending or processing!")
 
 type ctxKey int
 

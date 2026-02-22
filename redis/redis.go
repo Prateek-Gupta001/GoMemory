@@ -67,16 +67,49 @@ func (r *RedisOperationalStore) ChangeReqStatus(ctx context.Context, reqId strin
 	slog.Info("Request status updation was successful!")
 	return nil
 }
+
 func (r *RedisOperationalStore) CreateReq(reqId string, ctx context.Context) error {
-	_, err := r.RedisClient.HSet(ctx, reqId, []string{"status", string(types.Pending), "error", "", "createdAt", time.Now().String()}).Result()
+	isNew, err := r.RedisClient.HSetNX(ctx, reqId, "status", string(types.Pending)).Result()
+	if err != nil {
+		slog.Error("Got this error while trying to HsetNX", "error", err)
+		return err
+	}
+
+	if !isNew {
+		slog.Info("Request that is being tried to create is NOT NEW!")
+		// 2. The key exists. Fetch its actual current status.
+		currentStatus, err := r.RedisClient.HGet(ctx, reqId, "status").Result()
+		if err != nil {
+			slog.Error("Failed to fetch existing status for duplicate check", "error", err, "reqId", reqId)
+			return err
+		}
+
+		// 3. If it is anything OTHER than Failure, block it.
+		// This covers Pending, Processing, and Success.
+		if currentStatus != string(types.Failure) {
+			slog.Info("Duplicate request rejected. Job already exists and has not failed.", "reqId", reqId, "currentStatus", currentStatus)
+			return types.DuplicateError
+		}
+
+		slog.Info("Retrying a previously failed request. Overwriting status.", "reqId", reqId)
+		_, err = r.RedisClient.HSet(ctx, reqId, "status", string(types.Pending)).Result()
+		if err != nil {
+			slog.Error("Failed to reset status to Pending", "error", err, "reqId", reqId)
+			return err
+		}
+	}
+	_, err = r.RedisClient.HSet(ctx, reqId, []string{"error", "", "createdAt", time.Now().String()}).Result()
 	if err != nil {
 		return err
 	}
+
+	// 4. Set expiration
 	_, err = r.RedisClient.Expire(ctx, reqId, 24*time.Hour).Result()
 	if err != nil {
 		slog.Error("Got this error while trying to set the expiration for this reqId", "reqId", reqId, "error", err)
 		return err
 	}
+
 	slog.Info("Request creation was successful!")
 	return nil
 }

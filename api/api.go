@@ -56,7 +56,6 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 	}
 	srvErr := make(chan error, 1)
 	go func() {
-		slog.Info("Running HTTP server...")
 		srvErr <- srv.ListenAndServe()
 	}()
 
@@ -144,6 +143,14 @@ func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIE
 
 var Tracer = otel.Tracer("Go_Memory")
 
+func GetAllMsgString(msg []types.Message) string {
+	text := ""
+	for _, m := range msg {
+		text += m.Content
+	}
+	return text
+}
+
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("------------------------------------------------NEW INSERT MEMORY REQUEST------------------------------------------------")
 	req := &types.InsertMemoryRequest{}
@@ -156,7 +163,15 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 			Message: "Request format is wrong",
 		}
 	}
-	reqId := uuid.NewString()
+	if len(req.Messages) == 0 {
+		return &APIError{
+			Error:   fmt.Errorf("Len of messages provided is 0"),
+			Message: "No messages provided",
+			Status:  http.StatusBadRequest,
+		}
+	}
+	text := GetAllMsgString(req.Messages)
+	reqId := uuid.NewSHA1(uuid.NameSpaceOID, []byte(text+req.UserId)).String()
 	slog.Info("request Id intialised", "reqId", reqId)
 	memJob := types.MemoryInsertionJob{
 		Messages:  req.Messages,
@@ -166,10 +181,22 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	}
 	err := m.memory.SubmitMemoryInsertionRequest(memJob)
 	if err != nil {
-		slog.Info("Got this error while trying to insert memory", "error", err)
+		if err == types.DuplicateError {
+			// This is NOT a server error. The system worked perfectly.
+			slog.Info("Duplicate request intercepted. Returning existing tracking ID.", "reqId", memJob.ReqId)
+			writeJSON(w, http.StatusOK, MemoryInsertionResponse{
+				ReqId: memJob.ReqId,
+				Msg:   "Memory Insertion Job is already queued or processed successfully!",
+			})
+			return nil
+		}
+
+		// Only return a 500 if something actually broke.
+		slog.Error("Failed to insert memory", "error", err)
 		return &APIError{
-			Error:  err,
-			Status: http.StatusInternalServerError,
+			Error:   err,
+			Status:  http.StatusInternalServerError,
+			Message: "Failed to queue memory insertion.",
 		}
 	}
 	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well ..... //TODO: Implement the storage stuff.
@@ -236,6 +263,13 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			Message: "Malformed JSON here in the Get Memory request",
 			Error:   err,
 			Status:  http.StatusBadRequest,
+		}
+	}
+	if req.Messages == nil && req.UserQuery == "" {
+		return &APIError{
+			Error:   fmt.Errorf("Niether user query nor user messages was provided"),
+			Status:  http.StatusBadRequest,
+			Message: "Niether user query nor user messages was provided",
 		}
 	}
 	span.SetAttributes(
