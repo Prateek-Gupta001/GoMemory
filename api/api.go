@@ -137,7 +137,9 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 
 func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("Health check!")
-	writeJSON(w, http.StatusOK, "Server is healthy!")
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Server is healthy!"})
 	return nil
 }
 
@@ -267,9 +269,9 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 	}
 	if req.Messages == nil && req.UserQuery == "" {
 		return &APIError{
-			Error:   fmt.Errorf("Niether user query nor user messages was provided"),
+			Error:   fmt.Errorf("Neither user query nor user messages was provided"),
 			Status:  http.StatusBadRequest,
-			Message: "Niether user query nor user messages was provided",
+			Message: "Neither user query nor user messages was provided",
 		}
 	}
 	span.SetAttributes(
@@ -405,14 +407,6 @@ func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *
 			Error:   err,
 		}
 	}
-	if mem == nil {
-		return &APIError{
-			Status:  http.StatusOK,
-			Message: "User has no core memories!",
-			Error:   err,
-		}
-
-	}
 	writeJSON(w, http.StatusOK, mem)
 	return nil
 }
@@ -436,13 +430,16 @@ func (m *MemoryServer) DeleteGeneralMemory(w http.ResponseWriter, r *http.Reques
 	err := m.memory.DeleteMemory(req.MemoryIds, ctx)
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Got this error while trying to delete memory", "error", err, "userId", req.UserId)
+		slog.Error("Got this error while trying to delete general memory", "error", err, "userId", req.UserId)
 		return &APIError{
 			Message: "Deletion failed",
 			Error:   err,
 			Status:  http.StatusInternalServerError,
 		}
 	}
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Deletion was successful"})
 	return nil
 }
 
@@ -472,6 +469,9 @@ func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) 
 			Status:  http.StatusInternalServerError,
 		}
 	}
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Deletion was successful"})
 	return nil
 }
 

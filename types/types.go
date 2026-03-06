@@ -72,10 +72,10 @@ const (
 )
 
 type Memory struct {
-	Memory_text string
-	Type        MemoryType
-	Memory_Id   string
-	UserId      string
+	Memory_text string     `json:"memory_text"`
+	Type        MemoryType `json:"type"`
+	Memory_Id   string     `json:"memory_id"`
+	UserId      string     `json:"userId"`
 }
 
 type MemoryOutput struct {
