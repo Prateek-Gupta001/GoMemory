@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"sync"
+
 	"github.com/Prateek-Gupta001/GoMemory/embed"
 	"github.com/Prateek-Gupta001/GoMemory/llm"
 	"github.com/Prateek-Gupta001/GoMemory/redis"
@@ -21,71 +23,151 @@ import (
 
 type Memory interface {
 	GetMemories(user_query string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) //For normal messages
-	DeleteMemory(memoryIds []string, ctx context.Context) error                                                                 //from the db
-	SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
+	DeleteMemory(memoryIds []string, ctx context.Context) error
+	DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error //from the db
+	SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
 	GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error)
-	// in the future: delete user's memories and delete memory by Id...
+	StopMemoryAgent()
+	CreateUser(ctx context.Context) (string, error)
+	GetReqStatus(ctx context.Context, reqId string) (*FullReqStatus, error)
+}
+
+type FullReqStatus struct {
+	Status    types.ReqStatus `json:"status"`
+	Error     string          `json:"error,omitempty"`
+	CreatedAt string          `json:"createdAt"`
 }
 
 type MemoryAgent struct {
-	Vectordb        vectordb.VectorDB
-	LLM             llm.LLM
-	EmbedClient     embed.Embed
-	CoreMemoryCache redis.CoreMemoryCache
-	JSClient        nats.JetStreamContext
+	Vectordb         vectordb.VectorDB
+	MemoryAgentCtx   context.Context
+	LLM              llm.LLM
+	EmbedClient      embed.Embed
+	OperationalStore redis.OperationalStore
+	JSClient         nats.JetStreamContext
+	WG               *sync.WaitGroup
+	ActiveJobs       *sync.WaitGroup
 }
 
-func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.CoreMemoryCache, queueLen int, numWorker int) (*MemoryAgent, error) {
+func NewMemoryAgent(vectordb vectordb.VectorDB, llm llm.LLM, embedClient embed.Embed, nc nats.JetStreamContext, RC redis.OperationalStore, queueLen int, numWorker int, MemoryAgentCtx context.Context) (*MemoryAgent, error) {
+	wg := &sync.WaitGroup{}
 	m := &MemoryAgent{
-		Vectordb:        vectordb,
-		LLM:             llm,
-		EmbedClient:     embedClient,
-		CoreMemoryCache: RC,
-		JSClient:        nc,
+		Vectordb:         vectordb,
+		LLM:              llm,
+		EmbedClient:      embedClient,
+		OperationalStore: RC,
+		JSClient:         nc,
+		MemoryAgentCtx:   MemoryAgentCtx,
+		WG:               wg,
+		ActiveJobs:       &sync.WaitGroup{},
 	}
 	for i := 0; i < numWorker; i++ {
-		go m.MemoryWorker(i)
+		m.WG.Add(1)
+		go func() {
+			m.MemoryWorker(i, m.WG)
+		}()
 	}
 	return m, nil
 }
 
 var Tracer = otel.Tracer("Go_Memory")
 
-func (m *MemoryAgent) MemoryWorker(id int) {
-	m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
+func (m *MemoryAgent) StopMemoryAgent() {
+	slog.Info("Waiting for all the memory agent jobs to finish")
+	m.WG.Wait()
+	m.ActiveJobs.Wait()
+	slog.Info("All exisiting memory jobs have finished! Server is ready to be shutdown gracefully!")
+}
+
+func (m *MemoryAgent) MemoryWorker(id int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	subs, err := m.JSClient.QueueSubscribe("memory_work", "workers", func(msg *nats.Msg) {
 		fmt.Printf("----------------------------------- Worker got a memory Job: %s\n ----------------------------------- \n", string(msg.Data))
 		memJob := &types.MemoryInsertionJob{}
+		m.ActiveJobs.Add(1)
+		defer m.ActiveJobs.Done()
 		if err := json.Unmarshal(msg.Data, memJob); err != nil {
 			slog.Error("error while unmarshalling NATS-jetstream data", "error", err)
 			msg.Term()
 			return
 		}
+		m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, "", types.Processing)
 		if err := m.InsertMemory(memJob); err != nil {
+			m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, err.Error(), types.Failure)
 			slog.Info("Memory worker encountered an error while working", "error", err, "reqId", memJob.ReqId, "userId", memJob.UserId)
 			//TODO: Check from InsertMemory if its a deterministic error or not .. if its an API server issue or an OpenAI issue or an LLM issue
 			//TODO: .. You would wanna retry the job .. in that case .. otherwise not!
 			msg.Term()
 			return
 		}
+		m.OperationalStore.ChangeReqStatus(context.Background(), memJob.ReqId, "", types.Success)
 		msg.Ack()
-	})
+	}, nats.AckWait(time.Minute*2))
+	if err != nil {
+		slog.Error("Got this error while trying to subscribe to the NATJetstream queue", "error", err)
+		return
+	}
+	select {
+	case <-m.MemoryAgentCtx.Done():
+		slog.Info("Graceful shutdown of memory workers is in progress!")
+		if err := subs.Drain(); err != nil {
+			slog.Warn("Got this error while draining the memory queue")
+		}
+	}
 }
 
-func (m *MemoryAgent) SumbitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
-
+func (m *MemoryAgent) SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error {
 	slog.Info("Memory Job inserted successfully into NATS-Jetstream ", "reqId", memJob.ReqId)
+	err := m.OperationalStore.CreateReq(memJob.ReqId, context.Background())
+	if err != nil {
+		slog.Warn("Got this error while trying to submit memory insertion request", "error", err)
+		if err == types.DuplicateError {
+			return err
+		}
+		slog.Info("Failing create req silently") //if it's not duplicate stuff .. memory jobs are assumed to be crucial and should be processed anyway.
+	}
 	memJson, err := json.Marshal(memJob)
 	if err != nil {
 		slog.Info("Got this error while marshalling the MemoryInsertionJob ", "error", err)
 		return err
 	}
-	_, err = m.JSClient.Publish("memory_work", memJson)
-	return err
+	msg := &nats.Msg{
+		Subject: "memory_work",
+		Data:    memJson,
+		Header:  nats.Header{},
+	}
+	msg.Header.Set(nats.MsgIdHdr, memJob.ReqId)
+	_, err = m.JSClient.PublishMsg(msg)
+	if err != nil {
+		slog.Error("Got this error while publishing message to the nats-jetstream queue", "error", err)
+		return err
+	}
+	return nil
+}
+
+func (m *MemoryAgent) CreateUser(ctx context.Context) (string, error) {
+	userId, err := m.OperationalStore.CreateUser(ctx)
+	if err != nil {
+		return "", err
+	}
+	return userId, nil
+}
+
+func (m *MemoryAgent) GetReqStatus(ctx context.Context, reqId string) (*FullReqStatus, error) {
+	res, err := m.OperationalStore.GetReqStatus(ctx, reqId)
+	if err != nil {
+		return nil, err
+	}
+	stat := FullReqStatus{}
+	stat.CreatedAt = res["createdAt"]
+	stat.Error = res["error"]
+	stat.Status = types.ReqStatus(res["status"])
+	return &stat, nil
 }
 
 func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]types.Memory, error) {
-	mem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	mem, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get the core memories of the user", "userId", userId)
 		return nil, err
@@ -104,16 +186,30 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 	if err != nil {
 		slog.Warn("Got this error while getting similar memories! Trying to get Core Memories now", "error", err, "reqId", reqId)
 	}
-	CoreMemories, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	CoreMemories, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get core memories", "userId", userId, "error", err)
+		if err == types.ErrUserNotFound {
+			return nil, err
+		}
 	}
 	Memories := append(CoreMemories, GeneralMemories...)
+	if Memories == nil {
+		Memories = []types.Memory{}
+	}
 	return Memories, nil
 }
 
 func (m *MemoryAgent) DeleteMemory(memoryIds []string, ctx context.Context) error {
 	err := m.Vectordb.DeleteMemories(memoryIds, ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *MemoryAgent) DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error {
+	err := m.OperationalStore.DeleteCoreMemory(memoryIds, userId, ctx)
 	if err != nil {
 		return err
 	}
@@ -154,7 +250,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	if err != nil {
 		slog.Warn("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 	}
-	Existing_Core_Memories, err := m.CoreMemoryCache.GetCoreMemory(memjob.UserId, ctx)
+	Existing_Core_Memories, err := m.OperationalStore.GetCoreMemory(memjob.UserId, ctx)
 	if err != nil {
 		slog.Warn("Got this as the ERROR while getting exisiting core memories", "userId", memjob.UserId, "err", err)
 	}
@@ -230,7 +326,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	NewMem := append(UpdatedCoreMemories, CoreMemories...)
 	if updated {
 		slog.Info("Core Memories have been updated!", "userId", memjob.UserId, "Old Core Memories", Existing_Core_Memories, "New Core Memories", NewMem, "LLM's thinking", MemoryOutput.Reasoning)
-		err := m.CoreMemoryCache.SetCoreMemory(memjob.UserId, NewMem, ctx)
+		err := m.OperationalStore.SetCoreMemory(memjob.UserId, NewMem, ctx)
 		if err != nil {
 			slog.Warn("Got this error while trying to set the core memories of the user", "userId", memjob.UserId, "err", err)
 		}
@@ -254,6 +350,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 		}
 	}
 	//update the entry in the database.
+	slog.Info("Memory Insertion for the user was successful!", "userId", memjob.UserId)
 	return nil
 }
 
@@ -262,8 +359,11 @@ func (m *MemoryAgent) GetAllUserMemories(userId string, ctx context.Context) ([]
 	if err != nil {
 		slog.Warn("Got this error while trying to get general  memories of the user (in the memory agent)", "error", err, "userId", userId)
 	}
-	CoreMem, err := m.CoreMemoryCache.GetCoreMemory(userId, ctx)
+	CoreMem, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
+		if err == types.ErrUserNotFound {
+			return nil, err
+		}
 		slog.Warn("Got this error while trying to get core memories of the user (in the memory agent)", "error", err, "userId", userId)
 	}
 	AllMem := append(CoreMem, Generalmem...)

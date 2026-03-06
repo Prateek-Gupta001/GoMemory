@@ -1,5 +1,4 @@
 .env
 qdrant_storage_memory/
-Python_Embedding_Microservice /venv
-Python_Embedding_Microservice /__pycache__
-
+python-service/venv
+python-service/__pycache__
