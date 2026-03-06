@@ -20,6 +20,9 @@ type PostgresStore struct {
 
 func NewPostgresStore() (*PostgresStore, error) {
 	dbPassword := os.Getenv("DB_PASSWORD")
+	if dbPassword == "" {
+		dbPassword = "postgres" // Fallback for zero-friction local setup
+	}
 	connStr := fmt.Sprintf("host=127.0.0.1 port=5433 user=postgres dbname=memory password=%s sslmode=disable", dbPassword)
 	// ... rest of code
 	db, err := sql.Open("postgres", connStr)
