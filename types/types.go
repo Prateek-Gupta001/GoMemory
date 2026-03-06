@@ -1,5 +1,7 @@
 package types
 
+import "errors"
+
 type MemoryRetrievalRequest struct {
 	UserId    string    `json:"userId"`
 	Messages  []Message `json:"messages,omitempty"`
@@ -13,16 +15,15 @@ type InsertMemoryRequest struct {
 	Messages []Message `json:"messages"`
 }
 
-type GetAllUserMemoriesRequest struct {
-	UserId string `json:"userId"`
-}
-
 type DeleteMemoryRequest struct {
 	UserId    string   `json:"userId"`
 	MemoryIds []string `json:"memoryId"`
 }
 
 const UserIdKey ctxKey = iota
+
+var ErrUserNotFound = errors.New("user doesn't exist")
+var DuplicateError = errors.New("Duplicate Request that was either successful, pending or processing!")
 
 type ctxKey int
 
@@ -61,11 +62,20 @@ const (
 	MemoryTypeGeneral MemoryType = "general"
 )
 
+type ReqStatus string
+
+const (
+	Pending    ReqStatus = "pending"
+	Processing ReqStatus = "processing"
+	Success    ReqStatus = "success"
+	Failure    ReqStatus = "failure"
+)
+
 type Memory struct {
-	Memory_text string
-	Type        MemoryType
-	Memory_Id   string
-	UserId      string
+	Memory_text string     `json:"memory_text"`
+	Type        MemoryType `json:"type"`
+	Memory_Id   string     `json:"memory_id"`
+	UserId      string     `json:"userId"`
 }
 
 type MemoryOutput struct {

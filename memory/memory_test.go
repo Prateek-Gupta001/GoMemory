@@ -2,10 +2,12 @@ package memory
 
 import (
 	// "encoding/json"
+	"context"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,13 +59,17 @@ func NewtestMemoryAgent() *MemoryAgent {
 		panic(err)
 	}
 	slog.Info("Finished")
-	RC := redis.NewRedisCoreMemoryCache()
+	RC := redis.NewRedisOperationalStore()
 	agent := &MemoryAgent{
 		vectordb,
+		context.Background(),
 		&llm.GeminiLLM{},
 		embed,
 		RC,
-		js}
+		js,
+		&sync.WaitGroup{},
+		&sync.WaitGroup{},
+	}
 	return agent
 }
 
