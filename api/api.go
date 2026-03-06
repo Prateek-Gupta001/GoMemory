@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,8 +14,11 @@ import (
 
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
+	"github.com/Prateek-Gupta001/GoMemory/telemetry"
 	"github.com/Prateek-Gupta001/GoMemory/types"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -36,15 +40,22 @@ func NewMemoryServer(listenAddr string, store storage.Storage, memory memory.Mem
 func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err error) {
 
 	defer stop()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx)
+	if err != nil {
+		return err
+	}
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
 	srv := &http.Server{
 		Addr:         m.listenAddr,
-		ReadTimeout:  time.Second * 10,
-		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  time.Second * 5,
+		WriteTimeout: time.Second * 10,
 		Handler:      m.newHTTPHandler(),
 	}
 	srvErr := make(chan error, 1)
 	go func() {
-		slog.Info("Running HTTP server...")
 		srvErr <- srv.ListenAndServe()
 	}()
 
@@ -60,7 +71,8 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 	}
 
 	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
-	timeCtx, _ := context.WithTimeout(context.Background(), time.Second*50)
+	slog.Info("Closing all api routes!")
+	timeCtx, _ := context.WithTimeout(context.Background(), time.Second*5)
 	err = srv.Shutdown(timeCtx)
 	slog.Info("Stopping all currently ongoing memory jobs.")
 	m.memory.StopMemoryAgent()
@@ -70,12 +82,27 @@ func (m *MemoryServer) Run(ctx context.Context, stop context.CancelFunc) (err er
 
 func (m *MemoryServer) newHTTPHandler() http.Handler {
 	r := http.NewServeMux()
-	r.HandleFunc("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
-	r.HandleFunc("POST /get_memory", convertToHandleFunc(m.GetMemory))
-	r.HandleFunc("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
-	r.HandleFunc("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
-	r.HandleFunc("GET /health", convertToHandleFunc(m.HealthCheck))
-	r.HandleFunc("POST /delete_memory", convertToHandleFunc(m.DeleteUserMemory))
+	handle := func(pattern string, handlerFunc http.HandlerFunc) {
+		// "pattern" here will be "POST /add_memory", etc.
+		// traceName will be passed to Jaeger as the operation name
+		wrapped := otelhttp.NewHandler(handlerFunc, pattern)
+		r.Handle(pattern, wrapped)
+	}
+
+	// Register routes with the helper
+	handle("POST /add_memory", convertToHandleFunc(m.InsertIntoMemory))
+	handle("POST /get_memory", convertToHandleFunc(m.GetMemory))
+	handle("GET /get_all/{id}", convertToHandleFunc(m.GetAllUserMemories))
+	handle("GET /get_core/{id}", convertToHandleFunc(m.GetCoreMemories))
+	handle("GET /get_status/{id}", convertToHandleFunc(m.CheckReqStatus))
+	handle("GET /health", convertToHandleFunc(m.HealthCheck))
+	handle("POST /delete_memory/general", convertToHandleFunc(m.DeleteGeneralMemory))
+	handle("POST /delete_memory/core", convertToHandleFunc(m.DeleteCoreMemory))
+	handle("POST /create/user", convertToHandleFunc(m.CreateNewUser))
+
+	// Metrics endpoint (Standard, no wrap needed)
+	r.Handle("/metrics", promhttp.Handler())
+
 	return r
 }
 
@@ -110,14 +137,24 @@ func convertToHandleFunc(f apiFunc) http.HandlerFunc {
 
 func (m *MemoryServer) HealthCheck(w http.ResponseWriter, r *http.Request) *APIError {
 	slog.Info("Health check!")
-	writeJSON(w, http.StatusOK, "Server is healthy!")
-	return &APIError{}
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Server is healthy!"})
+	return nil
 }
 
 var Tracer = otel.Tracer("Go_Memory")
 
+func GetAllMsgString(msg []types.Message) string {
+	text := ""
+	for _, m := range msg {
+		text += m.Content
+	}
+	return text
+}
+
 func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) *APIError {
-	slog.Info("------------------------------------------------NEW REQUEST------------------------------------------------")
+	slog.Info("------------------------------------------------NEW INSERT MEMORY REQUEST------------------------------------------------")
 	req := &types.InsertMemoryRequest{}
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -128,7 +165,15 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 			Message: "Request format is wrong",
 		}
 	}
-	reqId := uuid.NewString()
+	if len(req.Messages) == 0 {
+		return &APIError{
+			Error:   fmt.Errorf("Len of messages provided is 0"),
+			Message: "No messages provided",
+			Status:  http.StatusBadRequest,
+		}
+	}
+	text := GetAllMsgString(req.Messages)
+	reqId := uuid.NewSHA1(uuid.NameSpaceOID, []byte(text+req.UserId)).String()
 	slog.Info("request Id intialised", "reqId", reqId)
 	memJob := types.MemoryInsertionJob{
 		Messages:  req.Messages,
@@ -136,12 +181,24 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 		UserId:    req.UserId,
 		Threshold: 0.6,
 	}
-	err := m.memory.SumbitMemoryInsertionRequest(memJob)
+	err := m.memory.SubmitMemoryInsertionRequest(memJob)
 	if err != nil {
-		slog.Info("Got this error while trying to insert memory", "error", err)
+		if err == types.DuplicateError {
+			// This is NOT a server error. The system worked perfectly.
+			slog.Info("Duplicate request intercepted. Returning existing tracking ID.", "reqId", memJob.ReqId)
+			writeJSON(w, http.StatusOK, MemoryInsertionResponse{
+				ReqId: memJob.ReqId,
+				Msg:   "Memory Insertion Job is already queued or processed successfully!",
+			})
+			return nil
+		}
+
+		// Only return a 500 if something actually broke.
+		slog.Error("Failed to insert memory", "error", err)
 		return &APIError{
-			Error:  err,
-			Status: http.StatusInternalServerError,
+			Error:   err,
+			Status:  http.StatusInternalServerError,
+			Message: "Failed to queue memory insertion.",
 		}
 	}
 	m.store.InsertMemoryRequest(req, reqId) //Sumbit this one as well ..... //TODO: Implement the storage stuff.
@@ -152,7 +209,48 @@ func (m *MemoryServer) InsertIntoMemory(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
+func (m *MemoryServer) CheckReqStatus(w http.ResponseWriter, r *http.Request) *APIError {
+	reqId, err := GetId(r)
+	if err != nil {
+		slog.Error("Got this error while getting Id for GetAllUserMemories", "error", err)
+		return &APIError{
+			Error:   err,
+			Message: "Bad Request",
+			Status:  http.StatusBadRequest,
+		}
+	}
+	status, err := m.memory.GetReqStatus(r.Context(), reqId)
+	if err != nil {
+		slog.Error("Got this error while trying to get the req status", "error", err, "id", reqId)
+		return &APIError{
+			Error:   err,
+			Message: "We are experiencing some techincal issues right now. Please try again after some time!",
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	writeJSON(w, http.StatusOK, status)
+	return nil
+}
+
+func (m *MemoryServer) CreateNewUser(w http.ResponseWriter, r *http.Request) *APIError {
+	userId, err := m.memory.CreateUser(r.Context())
+	if err != nil {
+		slog.Error("Got this error when trying to create a new user", "error", err)
+		return &APIError{
+			Error:   err,
+			Message: "We are experiencing some troubles at the moment .. please try again after some time",
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	slog.Info("USER ID", "userId", userId)
+	writeJSON(w, http.StatusOK, struct {
+		UserId string `json:"userId"`
+	}{UserId: userId})
+	return nil
+}
+
 func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	slog.Info("------------------------------------------------NEW GET MEMORY REQUEST------------------------------------------------")
 
 	var req = &types.MemoryRetrievalRequest{}
 	ctx, cancel := context.WithCancel(r.Context())
@@ -167,6 +265,13 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			Message: "Malformed JSON here in the Get Memory request",
 			Error:   err,
 			Status:  http.StatusBadRequest,
+		}
+	}
+	if req.Messages == nil && req.UserQuery == "" {
+		return &APIError{
+			Error:   fmt.Errorf("Neither user query nor user messages was provided"),
+			Status:  http.StatusBadRequest,
+			Message: "Neither user query nor user messages was provided",
 		}
 	}
 	span.SetAttributes(
@@ -221,8 +326,13 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			}
 		}
 		writeJSON(w, http.StatusOK, Memories)
+		return nil
 	}
-	return nil
+	return &APIError{
+		Status:  http.StatusBadRequest,
+		Message: "Atleast one input parameter (user query or messages) must be provided!",
+		Error:   fmt.Errorf("No input parameter provided for get memory!"),
+	}
 }
 
 func GetId(r *http.Request) (string, error) {
@@ -271,7 +381,7 @@ func (m *MemoryServer) GetAllUserMemories(w http.ResponseWriter, r *http.Request
 }
 
 func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *APIError {
-	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*10)
 	ctx, span := Tracer.Start(ctx, "GetCoreMemories")
 	defer span.End()
 	defer cancel()
@@ -297,19 +407,11 @@ func (m *MemoryServer) GetCoreMemories(w http.ResponseWriter, r *http.Request) *
 			Error:   err,
 		}
 	}
-	if mem == nil {
-		return &APIError{
-			Status:  http.StatusOK,
-			Message: "User has no core memories!",
-			Error:   err,
-		}
-
-	}
 	writeJSON(w, http.StatusOK, mem)
 	return nil
 }
 
-func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) *APIError {
+func (m *MemoryServer) DeleteGeneralMemory(w http.ResponseWriter, r *http.Request) *APIError {
 	//TODO: Update this endpoint to take in core memory Ids as well!
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
 	ctx, span := Tracer.Start(ctx, "DeleteUserMemory")
@@ -328,18 +430,49 @@ func (m *MemoryServer) DeleteUserMemory(w http.ResponseWriter, r *http.Request) 
 	err := m.memory.DeleteMemory(req.MemoryIds, ctx)
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Got this error while trying to delete memory", "error", err, "userId", req.UserId)
+		slog.Error("Got this error while trying to delete general memory", "error", err, "userId", req.UserId)
 		return &APIError{
 			Message: "Deletion failed",
 			Error:   err,
 			Status:  http.StatusInternalServerError,
 		}
 	}
-	return &APIError{
-		Error:   nil,
-		Message: "Memory Deletion succesful",
-		Status:  http.StatusOK,
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Deletion was successful"})
+	return nil
+}
+
+func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) *APIError {
+	//TODO: Update this endpoint to take in core memory Ids as well!
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
+	ctx, span := Tracer.Start(ctx, "DeleteCoreMemory")
+	defer span.End()
+	defer cancel()
+	req := &types.DeleteMemoryRequest{}
+	defer r.Body.Close()
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		return &APIError{
+			Message: "Bad request",
+			Error:   err,
+			Status:  http.StatusBadRequest,
+		}
 	}
+	span.SetAttributes(attribute.String("userId", req.UserId))
+	err := m.memory.DeleteCoreMemory(req.MemoryIds, req.UserId, ctx)
+	if err != nil {
+		span.RecordError(err)
+		slog.Error("Got this error while trying to delete core memory", "error", err, "userId", req.UserId)
+		return &APIError{
+			Message: "Deletion failed",
+			Error:   err,
+			Status:  http.StatusInternalServerError,
+		}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		MSG string `json:"message"`
+	}{MSG: "Deletion was successful"})
+	return nil
 }
 
 func ConstructContextualQuery(messages []types.Message, charLimit int) string {

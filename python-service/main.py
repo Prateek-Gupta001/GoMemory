@@ -11,6 +11,7 @@ import numpy as np
 import logging
 from typing import List, Tuple
 import os
+import time
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,65 +27,90 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_optimal_thread_config() -> Tuple[int, int, int]:
+    """
+    Dynamically calculates optimal thread configuration based on actual available hardware.
+    Returns: (model_threads, executor_workers, grpc_workers)
+    """
+    # 1. Reliably get CPU count, respecting Docker/Linux cgroup limits if applicable
+    try:
+        # sched_getaffinity is Linux-specific but highly accurate for containers
+        total_cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        # Fallback for Windows/macOS
+        total_cores = os.cpu_count() or 4
+
+    # 2. Calculate the sweet spot
+    if total_cores <= 4:
+        # Low resource environment: Prevent contention entirely
+        model_threads = 1
+        executor_workers = max(2, total_cores)
+        grpc_workers = executor_workers * 2
+    else:
+        # High resource environment: Give models enough threads for AVX vectorization (usually maxes out usefulness at 4-8), 
+        # use the rest to maximize concurrent request handling.
+        model_threads = min(4, max(2, total_cores // 4))
+        
+        # We divide remaining cores by model_threads to see how many simultaneous 
+        # model operations we can safely run without OS-level context switching
+        executor_workers = max(4, total_cores // model_threads)
+        
+        # gRPC workers handle I/O, so we can afford slightly more of them than pure compute workers
+        grpc_workers = executor_workers * 2
+        
+    logger.info(f"Hardware detected: {total_cores} cores available.")
+    logger.info(f"Configured Models to use {model_threads} threads each.")
+    logger.info(f"Configured Internal ThreadPool to {executor_workers} workers.")
+    
+    return model_threads, executor_workers, grpc_workers
+
+
 class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceServicer):
 
-    def __init__(self):
+    def __init__(self, model_threads: int, executor_workers: int):
         logger.info("Initializing embedding models...")
-        
         
         self.dense_model = TextEmbedding(
             model_name="BAAI/bge-small-en-v1.5",
             max_length=512,
-            threads=2 
+            threads=model_threads 
         )
         
         self.sparse_model = SparseTextEmbedding(
             model_name="prithivida/Splade_PP_en_v1",
-            threads=2 
+            threads=model_threads 
         )
         
-        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.executor = ThreadPoolExecutor(max_workers=executor_workers)
     
     def _get_dense_embedding(self, query: str) -> np.ndarray:
-        """
-        Generate dense embedding for a single query
-        
-        Args:
-            query: Input text string
-            
-        Returns:
-            numpy array of dense embedding values
-        """
         try:
-            embedding = list(self.dense_model([query]))[0]
+            prefix = "_Query_"
+            bge_instruction = "Represent this sentence for searching relevant passages: "
+            
+            if query.startswith(prefix):
+                logger.info("Query prefix detected, prepending BGE instruction")
+                query = bge_instruction + query[len(prefix):]
+            
+            embedding = list(self.dense_model.embed([query]))[0]
             return embedding.astype(np.float32)
         except Exception as e:
             logger.error(f"Error generating dense embedding: {e}")
             raise
     
     def _get_dense_embeddings_batch(self, queries: List[str]) -> List[np.ndarray]:
-        """
-        Generate dense embeddings for multiple queries in a single batch
-        Handles '_Query_' prefix logic for BGE instruction.
-        """
         try:
-            # PROCESS INPUTS: Handle prefix logic
             processed_queries = []
             bge_instruction = "Represent this sentence for searching relevant passages: "
             prefix = "_Query_"
             
             for q in queries:
                 if q.startswith(prefix):
-                    print("We had query appending! prepending the bge_instruction")
-                    # 1. Trim the prefix
                     trimmed_q = q[len(prefix):]
-                    # 2. Prepend BGE instruction (Only for dense)
                     processed_queries.append(bge_instruction + trimmed_q)
                 else:
-                    # Passage: Leave as is
                     processed_queries.append(q)
 
-            # Pass the processed list to the model
             embeddings = list(self.dense_model.embed(processed_queries))
             return [emb.astype(np.float32) for emb in embeddings]
             
@@ -93,81 +119,48 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             raise
     
     def _get_sparse_embedding(self, query: str) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Generate sparse embedding for a single query
-        
-        Args:
-            query: Input text string
-            
-        Returns:
-            tuple of (indices, values) where indices are token IDs and values are weights
-        """
         try:
             sparse_result = list(self.sparse_model.embed([query]))[0]
-            
             indices = np.array(sparse_result.indices, dtype=np.uint32)
             values = np.array(sparse_result.values, dtype=np.float32)
-            
             return indices, values
-                
         except Exception as e:
             logger.error(f"Error generating sparse embedding: {e}")
             raise
     
     def _get_sparse_embeddings_batch(self, queries: List[str]) -> List[Tuple[np.ndarray, np.ndarray]]:
-        """
-        Generate sparse embeddings for multiple queries in a single batch.
-        
-        Splits the batch into 'queries' and 'passages' based on the '_Query_' prefix
-        to utilize the model's specialized query_embed vs passage_embed methods.
-        """
         try:
-            # 1. SEGREGATION
-            # We need to track original indices to reconstruct the order later
             query_indices = []
             query_texts = []
-            
             passage_indices = []
             passage_texts = []
-            
             prefix = "_Query_"
             
             for idx, q in enumerate(queries):
                 if q.startswith(prefix):
-                    # Found a Query: Trim prefix and add to query batch
                     query_indices.append(idx)
                     query_texts.append(q[len(prefix):])
                 else:
-                    # Found a Passage: Add as is
                     passage_indices.append(idx)
                     passage_texts.append(q)
 
-            # Prepare a list to hold results in the correct order (None as placeholder)
-            # This ensures index 0 in input maps to index 0 in output
             all_sparse_results = [None] * len(queries)
 
-            # 2. EXECUTION
-            # Process Queries (if any)
             if query_texts:
-                # Using the specific query_embed method as requested
                 q_results = list(self.sparse_model.query_embed(query_texts))
                 for i, res in enumerate(q_results):
                     original_idx = query_indices[i]
                     all_sparse_results[original_idx] = res
 
-            # Process Passages (if any)
             if passage_texts:
-                # Using the specific passage_embed method as requested
                 p_results = list(self.sparse_model.passage_embed(passage_texts))
                 for i, res in enumerate(p_results):
                     original_idx = passage_indices[i]
                     all_sparse_results[original_idx] = res
 
-            # 3. FORMATTING
             embeddings = []
             for sparse_result in all_sparse_results:
                 if sparse_result is None:
-                    # This should theoretically never happen given the logic above
                     logger.error("Encountered None in sparse results reconstruction")
                     raise ValueError("Sparse embedding generation failed for an item")
 
@@ -182,52 +175,34 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             raise
     
     def CreateEmbeddings(self, request, context):
-        """
-        Create both dense and sparse embeddings for a list of queries
-        
-        Args:
-            request: Queries message containing list of query strings
-            context: gRPC context
-            
-        Returns:
-            Embeddings message with dense and sparse embeddings
-        """
         try:
             queries = request.queries
-            logger.info(f"Received CreateEmbeddings request for {len(queries)} queries")
-            
             if not queries:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("No queries provided")
                 return embeddingService_pb2.Embeddings()
             
-            # Run dense and sparse embeddings concurrently for maximum performance
-            # Note: The input 'queries' list is passed to both; they handle their own
-            # string processing internally so there are no race conditions.
+            _start_time = time.time()
+
             dense_future = self.executor.submit(self._get_dense_embeddings_batch, queries)
             sparse_future = self.executor.submit(self._get_sparse_embeddings_batch, queries)
             
-            # Wait for both to complete
             dense_embeddings_data = dense_future.result()
             sparse_embeddings_data = sparse_future.result()
             
-            # Convert to protobuf messages
             dense_embeddings = []
             for dense_emb in dense_embeddings_data:
-                dense_embedding_msg = embeddingService_pb2.DenseEmbedding(
-                    values=dense_emb.tolist()
-                )
-                dense_embeddings.append(dense_embedding_msg)
+                dense_embeddings.append(embeddingService_pb2.DenseEmbedding(values=dense_emb.tolist()))
             
             sparse_embeddings = []
             for indices, values in sparse_embeddings_data:
-                sparse_embedding_msg = embeddingService_pb2.SparseEmbedding(
+                sparse_embeddings.append(embeddingService_pb2.SparseEmbedding(
                     indices=indices.tolist(),
                     values=values.tolist()
-                )
-                sparse_embeddings.append(sparse_embedding_msg)
+                ))
             
-            logger.info(f"Successfully created embeddings for {len(queries)} queries")
+            _elapsed_ms = (time.time() - _start_time) * 1000
+            logger.info(f"CreateEmbeddings completed in {_elapsed_ms:.2f}ms for {len(queries)} queries")
             
             return embeddingService_pb2.Embeddings(
                 dense_embeddings=dense_embeddings,
@@ -241,33 +216,19 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             return embeddingService_pb2.Embeddings()
     
     def CreateDenseEmbedding(self, request, context):
-        """
-        Create dense embedding for a single query
-        
-        Args:
-            request: Query message containing a single query string
-            context: gRPC context
-            
-        Returns:
-            DenseEmbedding message with embedding values
-        """
         try:
             query = request.query
-            logger.info(f"Received CreateDenseEmbedding request for query: '{query[:50]}...'")
-            
             if not query or not query.strip():
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Empty query provided")
                 return embeddingService_pb2.DenseEmbedding()
             
-            # Generate dense embedding
+            _start_time = time.time()
             dense_emb = self._get_dense_embedding(query)
+            _elapsed_ms = (time.time() - _start_time) * 1000
+            logger.info(f"CreateDenseEmbedding completed in {_elapsed_ms:.2f}ms")
             
-            logger.info(f"Successfully created dense embedding (dim: {len(dense_emb)})")
-            
-            return embeddingService_pb2.DenseEmbedding(
-                values=dense_emb.tolist()
-            )
+            return embeddingService_pb2.DenseEmbedding(values=dense_emb.tolist())
             
         except Exception as e:
             logger.error(f"Error in CreateDenseEmbedding: {e}")
@@ -276,29 +237,21 @@ class EmbeddingServiceServicer(embeddingService_pb2_grpc.EmbeddingServiceService
             return embeddingService_pb2.DenseEmbedding()
 
 
-
-# 1. Try to load .env file (useful for local dev, ignored if file missing)
 load_dotenv()
-
-# 2. Get PORT from Environment, default to 50051 if missing
 port = os.getenv("PORT", "50051")
 
-def serve(port=port, max_workers=10):
-    """
-    Start the gRPC server
+def serve():
+    # Dynamically grab the hardware allocation
+    model_threads, executor_workers, grpc_workers = get_optimal_thread_config()
+
+    # Pass grpc_workers to the front-door server
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=grpc_workers))
     
-    Args:
-        port: Port number to listen on
-        max_workers: Maximum number of worker threads
-    """
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
-    
-    # Add the servicer to the server
+    # Pass model/executor allocation to the internal engine
     embeddingService_pb2_grpc.add_EmbeddingServiceServicer_to_server(
-        EmbeddingServiceServicer(), server
+        EmbeddingServiceServicer(model_threads, executor_workers), server
     )
     
-    # Bind to port
     server.add_insecure_port(f'[::]:{port}')
     
     logger.info(f"Starting gRPC server on port {port}...")

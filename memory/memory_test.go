@@ -59,7 +59,7 @@ func NewtestMemoryAgent() *MemoryAgent {
 		panic(err)
 	}
 	slog.Info("Finished")
-	RC := redis.NewRedisCoreMemoryCache()
+	RC := redis.NewRedisOperationalStore()
 	agent := &MemoryAgent{
 		vectordb,
 		context.Background(),

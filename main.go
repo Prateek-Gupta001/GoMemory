@@ -15,7 +15,6 @@ import (
 	"github.com/Prateek-Gupta001/GoMemory/memory"
 	"github.com/Prateek-Gupta001/GoMemory/redis"
 	"github.com/Prateek-Gupta001/GoMemory/storage"
-	"github.com/Prateek-Gupta001/GoMemory/telemetry"
 	"github.com/Prateek-Gupta001/GoMemory/vectordb"
 	"github.com/joho/godotenv"
 	"github.com/nats-io/nats.go"
@@ -93,18 +92,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	shutdown, err := telemetry.InitTracer("Go_Memory")
-	if err != nil {
-		slog.Error("failed to init tracer", "error", err)
-		os.Exit(1)
-	}
-	defer func() {
-		if err := shutdown(context.Background()); err != nil {
-			slog.Error("failed to shutdown tracer", "error", err)
-		}
-	}()
+	// shutdown, err := telemetry.InitTracer("Go_Memory")
+	// if err != nil {
+	// 	slog.Error("failed to init tracer", "error", err)
+	// 	os.Exit(1)
+	// }
+	// defer func() {
+	// 	if err := shutdown(context.Background()); err != nil {
+	// 		slog.Error("failed to shutdown tracer", "error", err)
+	// 	}
+	// }()
 	defer nc.Close()
-	RC := redis.NewRedisCoreMemoryCache()
+	RC := redis.NewRedisOperationalStore()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	memory, err := memory.NewMemoryAgent(vectordb, llm, embedClient, js, RC, 5000, 2, ctx)
 	if err != nil {

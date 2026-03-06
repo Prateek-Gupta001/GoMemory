@@ -337,7 +337,11 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 	ctx, span := Tracer.Start(ctx, "Getting Expanded Query from the LLM")
 	defer span.End()
 	history := GetGeminiHistory(messages)
-	chat, _ := llm.GeminiClient.Chats.Create(ctx, "gemini-3-flash-preview", nil, history)
+	chat, err := llm.GeminiClient.Chats.Create(ctx, "gemini-3-flash-preview", nil, history)
+	if err != nil {
+		slog.Error("Got this error while trying to create a gemini chat", "error", err)
+		return ""
+	}
 	expandQueryPrompt := ` 
 	--- SYSTEM INSTRUCTION ---
 	### Role
@@ -366,7 +370,6 @@ func (llm *GeminiLLM) ExpandQuery(messages []types.Message, ctx context.Context)
 
 	//TODO: Test this properly .... can cause error maybe ....
 	var res *genai.GenerateContentResponse
-	var err error
 	for i := 0; i < 5; i++ {
 		res, err = chat.SendMessage(ctx, genai.Part{Text: expandQueryPrompt})
 
@@ -428,5 +431,6 @@ func GetGeminiHistory(messages []types.Message) []*genai.Content {
 		content := genai.NewContentFromText(msg.Content, genai.Role(msg.Role))
 		history = append(history, content)
 	}
+	slog.Info("Giving this history", "history", history)
 	return history
 }
