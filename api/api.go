@@ -267,6 +267,10 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 			Status:  http.StatusBadRequest,
 		}
 	}
+	core := true
+	if req.Core != nil {
+		core = *req.Core
+	}
 	if req.Messages == nil && req.UserQuery == "" {
 		return &APIError{
 			Error:   fmt.Errorf("Neither user query nor user messages was provided"),
@@ -298,7 +302,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
 		//TODO: Add concurrent chunking and memory retrieval in v2 of Go Memory.
 		query := ConstructContextualQuery(req.Messages, 500)
-		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, req.Core, ctx)
+		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, core, ctx)
 		if err != nil {
 			slog.Error("Got this error while trying to get memories", "error", err)
 			span.RecordError(err)
@@ -315,7 +319,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		span.SetAttributes(attribute.String("type", "userQuery"))
 		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)
 		userQuery := req.UserQuery
-		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, req.Threshold, req.Core, ctx)
+		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, req.Threshold, core, ctx)
 		if err != nil {
 			span.RecordError(err)
 			slog.Error("Got this error while trying to get memories", "error", err)
