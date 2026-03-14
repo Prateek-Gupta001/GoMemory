@@ -7,6 +7,7 @@ type MemoryRetrievalRequest struct {
 	Messages  []Message `json:"messages,omitempty"`
 	UserQuery string    `json:"query,omitempty"`
 	Threshold float32   `json:"threshold,omitempty"`
+	Core      bool      `json:"core,omitempty"`
 	ReqId     string
 }
 

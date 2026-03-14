@@ -22,7 +22,7 @@ import (
 )
 
 type Memory interface {
-	GetMemories(user_query string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) //For normal messages
+	GetMemories(user_query string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) //For normal messages
 	DeleteMemory(memoryIds []string, ctx context.Context) error
 	DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error //from the db
 	SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
@@ -175,7 +175,7 @@ func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]typ
 	return mem, nil
 }
 
-func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
+func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) {
 	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + text}, ctx)
 	//TODO: Make these two independent requests concurrent using goroutines and waitgroups, errgroups. Here AND in GetAllUserMemories.
 	if err != nil {
@@ -193,7 +193,10 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 			return nil, err
 		}
 	}
-	Memories := append(CoreMemories, GeneralMemories...)
+	Memories := GeneralMemories
+	if core {
+		Memories = append(Memories, CoreMemories...)
+	}
 	if Memories == nil {
 		Memories = []types.Memory{}
 	}

@@ -138,7 +138,7 @@ func TestGetMemories(t *testing.T) {
 		},
 	}
 	query := ConstructContextualQuery(memories, 500)
-	m, err := agent.GetMemories(query, "user_123", "1234", 0.65, t.Context())
+	m, err := agent.GetMemories(query, "user_123", "1234", 0.65, true, t.Context())
 	if err != nil {
 		t.Error("ERROR ", err)
 		t.Fail()
