@@ -22,7 +22,7 @@ import (
 )
 
 type Memory interface {
-	GetMemories(user_query string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) //For normal messages
+	GetMemories(queries []string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) //For normal messages
 	DeleteMemory(memoryIds []string, ctx context.Context) error
 	DeleteCoreMemory(memoryIds []string, userId string, ctx context.Context) error //from the db
 	SubmitMemoryInsertionRequest(memJob types.MemoryInsertionJob) error
@@ -175,17 +175,21 @@ func (m *MemoryAgent) GetCoreMemories(userId string, ctx context.Context) ([]typ
 	return mem, nil
 }
 
-func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) {
-	dense, sparse, err := m.EmbedClient.GenerateEmbeddings([]string{"_Query_" + text}, ctx)
+func (m *MemoryAgent) GetMemories(queries []string, userId string, reqId string, threshold float32, core bool, ctx context.Context) ([]types.Memory, error) {
+	for idx, q := range queries {
+		queries[idx] = "_Query_" + q
+	}
+	dense, sparse, err := m.EmbedClient.GenerateEmbeddings(queries, ctx)
 	//TODO: Make these two independent requests concurrent using goroutines and waitgroups, errgroups. Here AND in GetAllUserMemories.
 	if err != nil {
 		slog.Error("Got this error while generating emebddings", "error", err, "reqId", reqId)
 		return nil, err
 	}
-	GeneralMemories, err := m.Vectordb.GetSimilarMemories(dense[0], sparse[0], userId, threshold, ctx)
+	GeneralMemories, err := m.Vectordb.GetSimilarMemories(dense, sparse, userId, threshold, ctx)
 	if err != nil {
 		slog.Warn("Got this error while getting similar memories! Trying to get Core Memories now", "error", err, "reqId", reqId)
 	}
+	//You retrieve core memories irrespective of the flag/bool because it acts as a check as well for the registered user.
 	CoreMemories, err := m.OperationalStore.GetCoreMemory(userId, ctx)
 	if err != nil {
 		slog.Info("Got this error while trying to get core memories", "userId", userId, "error", err)
@@ -193,6 +197,7 @@ func (m *MemoryAgent) GetMemories(text string, userId string, reqId string, thre
 			return nil, err
 		}
 	}
+	//TODO: Check that SAME memories aren't given
 	Memories := GeneralMemories
 	if core {
 		Memories = append(Memories, CoreMemories...)
@@ -249,7 +254,7 @@ func (m *MemoryAgent) InsertMemory(memjob *types.MemoryInsertionJob) error {
 	//take query and pass it to qdrant
 	//Here len of Embedding will be 0
 	slog.Info("Len of the emebddings should be in harmony", "len(DenseEmbedding)", len(DenseEmbedding), "len(SparseEmbedding)", len(SparseEmbedding), "num", 1)
-	Existing_General_Memories, err := m.Vectordb.GetSimilarMemories(DenseEmbedding[0], SparseEmbedding[0], memjob.UserId, memjob.Threshold, ctx)
+	Existing_General_Memories, err := m.Vectordb.GetSimilarMemories(DenseEmbedding, SparseEmbedding, memjob.UserId, memjob.Threshold, ctx)
 	if err != nil {
 		slog.Warn("Got this error message here while trying to get similarity results with the expanded query", "error", err, "reqId", memjob.ReqId)
 	}

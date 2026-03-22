@@ -12,7 +12,7 @@ import (
 )
 
 type VectorDB interface {
-	GetSimilarMemories(types.DenseEmbedding, types.SparseEmbedding, string, float32, context.Context) ([]types.Memory, error)
+	GetSimilarMemories([]types.DenseEmbedding, []types.SparseEmbedding, string, float32, context.Context) ([]types.Memory, error)
 	InsertNewMemories([]types.DenseEmbedding, []types.SparseEmbedding, []string, string, context.Context) error
 	DeleteMemories([]string, context.Context) error
 	GetAllUserMemories(userId string, ctx context.Context) ([]types.Memory, error)
@@ -74,29 +74,38 @@ func NewQdrantMemoryDB() (*QdrantMemoryDB, error) {
 
 var Tracer = otel.Tracer("Go_Memory")
 
-func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbedding, SparseEmbedding types.SparseEmbedding, userId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
+func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding []types.DenseEmbedding, SparseEmbedding []types.SparseEmbedding, userId string, threshold float32, ctx context.Context) ([]types.Memory, error) {
 	ctx, span := Tracer.Start(ctx, "Vector Search for Memories")
 	defer span.End()
-	res, err := qdb.Client.Query(ctx, &qdrant.QueryPoints{
-		CollectionName: "Go_Memory_db",
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				qdrant.NewMatch("userId", userId),
-			}},
-		ScoreThreshold: &threshold,
-		WithPayload:    qdrant.NewWithPayload(true),
-		Prefetch: []*qdrant.PrefetchQuery{
-			{
-				Query: qdrant.NewQuerySparse(SparseEmbedding.Indices, SparseEmbedding.Values),
-				Using: qdrant.PtrOf("sparse"),
+	queryBatchPoints := make([]*qdrant.QueryPoints, 0, len(DenseEmbedding))
+	for idx := range DenseEmbedding {
+		queryBatchPoints = append(queryBatchPoints, &qdrant.QueryPoints{
+			CollectionName: "Go_Memory_db",
+			Filter: &qdrant.Filter{
+				Must: []*qdrant.Condition{
+					qdrant.NewMatch("userId", userId),
+				}},
+			ScoreThreshold: &threshold,
+			WithPayload:    qdrant.NewWithPayload(true),
+			Prefetch: []*qdrant.PrefetchQuery{
+				{
+					Query: qdrant.NewQuerySparse(SparseEmbedding[idx].Indices, SparseEmbedding[idx].Values),
+					Using: qdrant.PtrOf("sparse"),
+				},
+				{
+					Query: qdrant.NewQueryDense(DenseEmbedding[idx].Values),
+					Using: qdrant.PtrOf("dense"),
+				},
 			},
-			{
-				Query: qdrant.NewQueryDense(DenseEmbedding.Values),
-				Using: qdrant.PtrOf("dense"),
-			},
+			Query: qdrant.NewQueryFusion(qdrant.Fusion_RRF),
 		},
-		Query: qdrant.NewQueryFusion(qdrant.Fusion_RRF),
+		)
+	}
+	res, err := qdb.Client.QueryBatch(ctx, &qdrant.QueryBatchPoints{
+		CollectionName: "Go_Memory_db",
+		QueryPoints:    queryBatchPoints,
 	})
+
 	if err != nil {
 		slog.Error("Got this error while trying to get similar memories", "error", err)
 		return []types.Memory{}, err
@@ -106,22 +115,27 @@ func (qdb *QdrantMemoryDB) GetSimilarMemories(DenseEmbedding types.DenseEmbeddin
 		slog.Info("No Memories of the user found", "userId", userId)
 		return []types.Memory{}, nil
 	}
-	for _, r := range res {
-		y := r.Payload
-		slog.Info("memory is", "memory", y["Memory"].GetStringValue())
-		_, ok := y["Memory"]
-		if !ok {
-			slog.Error("Payload is missing 'Memory' key", "id", r.Id)
-			continue
+	var memoryHashMap = make(map[string]types.Memory)
+	for _, payload := range res {
+		for _, r := range payload.Result {
+			y := r.Payload
+			_, ok := y["Memory"]
+			if !ok {
+				slog.Error("Payload is missing 'Memory' key", "id", r.Id)
+				continue
+			}
+			memoryHashMap[r.Id.GetUuid()] = types.Memory{
+				Memory_Id:   r.Id.GetUuid(),
+				Memory_text: string(y["Memory"].GetStringValue()),
+				Type:        types.MemoryTypeGeneral,
+				UserId:      userId,
+			}
 		}
-		Memories = append(Memories, types.Memory{
-			Memory_text: string(y["Memory"].GetStringValue()),
-			Memory_Id:   r.Id.GetUuid(),
-			Type:        types.MemoryTypeGeneral,
-			UserId:      userId,
-		})
-
 	}
+	for _, mem := range memoryHashMap {
+		Memories = append(Memories, mem)
+	}
+
 	slog.Info("Similar Memories are being returned from qdrant!", "memories", Memories)
 	return Memories, nil
 }

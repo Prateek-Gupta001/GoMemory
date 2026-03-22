@@ -301,8 +301,8 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		slog.Info("Messages type request came in here!", "reqId", reqId)
 		//TODO: Update the python grpc server ... to support asymmetric retreival ... (Sparse query: 2000 chars, Dense query: 500 characters)
 		//TODO: Add concurrent chunking and memory retrieval in v2 of Go Memory.
-		query := ConstructContextualQuery(req.Messages, 500)
-		Memories, err := m.memory.GetMemories(query, req.UserId, reqId, req.Threshold, core, ctx)
+		queries := ConstructContextualQueries(req.Messages, 500)
+		Memories, err := m.memory.GetMemories(queries, req.UserId, reqId, req.Threshold, core, ctx)
 		if err != nil {
 			slog.Error("Got this error while trying to get memories", "error", err)
 			span.RecordError(err)
@@ -319,7 +319,7 @@ func (m *MemoryServer) GetMemory(w http.ResponseWriter, r *http.Request) *APIErr
 		span.SetAttributes(attribute.String("type", "userQuery"))
 		slog.Info("UserQuery type request came in here!", "reqId", reqId, "userQuery", req.UserQuery)
 		userQuery := req.UserQuery
-		Memories, err := m.memory.GetMemories(userQuery, req.UserId, reqId, req.Threshold, core, ctx)
+		Memories, err := m.memory.GetMemories([]string{userQuery}, req.UserId, reqId, req.Threshold, core, ctx)
 		if err != nil {
 			span.RecordError(err)
 			slog.Error("Got this error while trying to get memories", "error", err)
@@ -479,53 +479,64 @@ func (m *MemoryServer) DeleteCoreMemory(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-func ConstructContextualQuery(messages []types.Message, charLimit int) string {
+func ConstructContextualQueries(messages []types.Message, charLimit int) []string {
 	if len(messages) == 0 {
-		return ""
+		return nil
 	}
-
-	var accumulatedParts []string
-	currentLen := 0
 
 	re := regexp.MustCompile(`[^.!?]+[.!?]+(\s|$)`)
 
-	// 1. Iterate BACKWARDS through messages (Latest -> Oldest)
+	// Step 1: Collect every sentence in reverse-chronological order
+	// (latest message → latest sentence first)
+	var revSentences []string
 	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		content := strings.TrimSpace(msg.Content)
+		content := strings.TrimSpace(messages[i].Content)
 		if content == "" {
 			continue
 		}
-
 		sentences := re.FindAllString(content, -1)
 		if len(sentences) == 0 {
 			sentences = []string{content}
 		}
-
-		var msgParts []string
-
 		for j := len(sentences) - 1; j >= 0; j-- {
-			sent := strings.TrimSpace(sentences[j])
-			msgParts = append([]string{sent}, msgParts...) // Prepend to keep order within message
-
-			currentLen += len(sent)
-
-			// Check limit inside the sentence loop
-			if currentLen >= charLimit {
-				break
-			}
-		}
-
-		finalMsgContent := strings.Join(msgParts, " ")
-
-		// Prepend this block to our master list of parts
-		accumulatedParts = append([]string{finalMsgContent}, accumulatedParts...)
-
-		if currentLen >= charLimit {
-			break
+			revSentences = append(revSentences, strings.TrimSpace(sentences[j]))
 		}
 	}
 
-	// Join all blocks with newlines to separate turns clearly
-	return strings.Join(accumulatedParts, "\n")
+	// Step 2: Greedily pack sentences into charLimit-sized chunks.
+	// The buffer accumulates in reverse-chron order; we flip it before saving
+	// so each chunk's text reads oldest → newest internally.
+	var chunks []string
+	var buf []string
+	bufLen := 0
+
+	flushChunk := func() {
+		if len(buf) == 0 {
+			return
+		}
+		for l, r := 0, len(buf)-1; l < r; l, r = l+1, r-1 {
+			buf[l], buf[r] = buf[r], buf[l]
+		}
+		chunks = append(chunks, strings.Join(buf, " "))
+		buf = nil
+		bufLen = 0
+	}
+
+	for _, sent := range revSentences {
+		if bufLen > 0 && bufLen+len(sent) > charLimit {
+			flushChunk()
+		}
+		buf = append(buf, sent)
+		bufLen += len(sent)
+	}
+	flushChunk()
+
+	// Step 3: Reverse so chunks[0] = oldest context, chunks[last] = most recent.
+	for l, r := 0, len(chunks)-1; l < r; l, r = l+1, r-1 {
+		chunks[l], chunks[r] = chunks[r], chunks[l]
+	}
+	for idx, c := range chunks {
+		slog.Info("The chunks being sent right now are", "idx", idx, "chunk", c)
+	}
+	return chunks
 }
