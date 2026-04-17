@@ -34,22 +34,6 @@ It uses a **dual memory architecture** — a persistent *core memory profile* an
 >
 > Do all the hard thinking at write time — so that reads are just a lightweight vector lookup.
 
----
-
-## Benchmarks
-
-> Tested on a Ryzen 5 CPU (no GPU). Sub-50ms is achievable with GPU-based embedding inference.
-
-| Metric | GoMemory | mem0 |
-|---|---|---|
-| **Retrieval Latency (p50)** | **< 100ms** | ~500ms+ |
-| **Memory Quality Coverage** | ~90–95% | ~99% |
-| **Architecture** | Hybrid RAG + LLM Orchestration | Graph DB + RAG |
-| **Self-hostable** | ✅ | ✅ |
-
-> If you need 99% memory recall and latency is no concern — use mem0. If you need blazing-fast retrieval at 90–95% quality — use GoMemory.
-
----
 
 ## Core Features
 
