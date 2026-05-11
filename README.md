@@ -71,7 +71,7 @@ Client Request (/add_memory)
                 └── INSERT new / DELETE stale
                         │
                         ▼
-              Qdrant (vectors) + PostgreSQL (metadata) + Redis (core memory cache)
+              Qdrant (vectors) + Redis (core memory cache)
 ```
 
 ### Embedding Models
